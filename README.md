@@ -10,25 +10,72 @@ KISS MCP server for spoken and Telegram notifications.
 
 ## Install (npx)
 
+Recommended first run (setup UI on):
+
 ```bash
-codex mcp add simple-notify -- npx -y simple-notify-mcp@latest
+codex mcp add simple-notify -- \
+  npx -y simple-notify-mcp@latest \
+  --enable-setup-web \
+  --setup-port \
+  21420
+```
+
+If you want env-based OpenAI key on first run:
+
+```bash
+codex mcp add simple-notify --env OPENAI_API_KEY="$OPENAI_API_KEY" -- \
+  npx -y simple-notify-mcp@latest \
+  --enable-setup-web \
+  --setup-port \
+  21420
+```
+
+After config is saved, switch to normal mode (setup UI off):
+
+```bash
+codex mcp remove simple-notify
+codex mcp add simple-notify -- \
+  npx -y simple-notify-mcp@latest
 ```
 
 ## Local add (from repo)
 
+Recommended first run (setup UI on):
+
 ```bash
 # from tools/simple-notify-mcp directory
 codex mcp add simple-notify -- \
-  node ./build/index.js
+  node ./build/index.js \
+  --enable-setup-web \
+  --setup-port \
+  21420
 ```
 
-If you want OpenAI TTS without writing key into config:
+If you want env-based OpenAI key:
 
 ```bash
 # from tools/simple-notify-mcp directory
 codex mcp add simple-notify --env OPENAI_API_KEY="$OPENAI_API_KEY" -- \
+  node ./build/index.js \
+  --enable-setup-web \
+  --setup-port \
+  21420
+```
+
+After config is saved, switch to normal mode (setup UI off):
+
+```bash
+# from tools/simple-notify-mcp directory
+codex mcp remove simple-notify
+codex mcp add simple-notify -- \
   node ./build/index.js
 ```
+
+First-run flow:
+- call `simple_notify_status`
+- open `setupWeb.url`
+- save settings in the panel
+- remove/re-add without `--enable-setup-web` for normal usage
 
 ## Configuration schema
 
@@ -62,17 +109,7 @@ Config file path (default):
 }
 ```
 
-## Optional setup web UI (disabled by default)
-
-Enable setup UI only when you want browser-based config:
-
-```bash
-# from tools/simple-notify-mcp directory
-codex mcp add simple-notify -- \
-  node ./build/index.js \
-  --enable-setup-web \
-  --setup-port 21420
-```
+## Setup web UI flags (disabled by default)
 
 Flags:
 - `--enable-setup-web` (default off)
