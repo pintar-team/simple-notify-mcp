@@ -2,7 +2,7 @@
 import process from "node:process";
 import {
   getString,
-  hasSystemTtsSupport,
+  isTtsAvailable,
   loadRuntime,
   sendTelegram,
   speakText
@@ -12,8 +12,7 @@ const argv = process.argv.slice(2);
 const { args, runtime } = await loadRuntime(argv);
 
 const text = getString(args["text"]) ?? "simple-notify-mcp self-test";
-const ttsEnabled = (Boolean(process.env.OPENAI_API_KEY) || hasSystemTtsSupport()) &&
-  args["tts"] !== false;
+const ttsEnabled = isTtsAvailable(runtime) && args["tts"] !== false;
 const telegramEnabled = Boolean(runtime.keys.telegram?.botToken && runtime.telegram.chatId) &&
   args["telegram"] !== false;
 

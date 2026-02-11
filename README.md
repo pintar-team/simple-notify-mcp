@@ -4,95 +4,126 @@ KISS MCP server for spoken and Telegram notifications.
 
 ## Tools
 
-- `simple_notify_status`: always available; returns capability/config/setup-web state.
-- `tts_say`: available when OpenAI key or macOS system TTS is available.
+- `simple_notify_status`: always available; returns capabilities, missing config, and setup-web state.
+- `tts_say`: text-only input; async by default, uses configured provider (`openai`, `fal-minimax`, `fal-elevenlabs`) with macOS `say` fallback.
 - `telegram_notify`: available when Telegram bot token + chat id are configured.
 
-## Install (npx)
+## Quickstart (npx, recommended)
 
-Recommended first run (setup UI on):
+Do these steps in this exact order.
+
+1. Add with setup web enabled:
 
 ```bash
 codex mcp add simple-notify -- \
   npx -y simple-notify-mcp@latest \
   --enable-setup-web \
-  --setup-port \
-  21420
+  --setup-port 21420
 ```
 
-If you want env-based OpenAI key on first run:
+2. Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status` and send you `setupWeb.url`, or call `simple_notify_status` yourself and copy the link.
+3. Save your settings (provider + keys) in the web panel.
+4. Re-add in normal mode (without setup web):
 
 ```bash
-codex mcp add simple-notify --env OPENAI_API_KEY="$OPENAI_API_KEY" -- \
+codex mcp remove simple-notify
+codex mcp add simple-notify -- npx -y simple-notify-mcp@latest
+```
+
+5. Verify by calling:
+- `simple_notify_status`
+- `tts_say` with `{ "text": "test" }`
+
+If you want env keys from the start:
+
+```bash
+codex mcp add simple-notify -- \
+  --env OPENAI_API_KEY="$OPENAI_API_KEY" \
+  --env FAL_KEY="$FAL_KEY" \
+  -- npx -y simple-notify-mcp@latest \
+  --enable-setup-web \
+  --setup-port 21420
+```
+
+## Quickstart (local repo)
+
+From `tools/simple-notify-mcp`:
+
+1. Add with setup web:
+
+```bash
+codex mcp add simple-notify -- \
+  node ./build/index.js \
+  --enable-setup-web \
+  --setup-port 21420
+```
+
+2. Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status` and send you `setupWeb.url`, or call `simple_notify_status` yourself and copy the link.
+3. Re-add without setup web:
+
+```bash
+codex mcp remove simple-notify
+codex mcp add simple-notify -- node ./build/index.js
+```
+
+## Common Mistake
+
+If `simple_notify_status` shows:
+- `setupWeb.enabled: false`
+- `setupWeb.url: null`
+
+then you added server without `--enable-setup-web`.
+
+Fix:
+
+```bash
+codex mcp remove simple-notify
+codex mcp add simple-notify -- \
   npx -y simple-notify-mcp@latest \
   --enable-setup-web \
-  --setup-port \
-  21420
+  --setup-port 21420
 ```
 
-After config is saved, switch to normal mode (setup UI off):
-
-```bash
-codex mcp remove simple-notify
-codex mcp add simple-notify -- \
-  npx -y simple-notify-mcp@latest
-```
-
-## Local add (from repo)
-
-Recommended first run (setup UI on):
-
-```bash
-# from tools/simple-notify-mcp directory
-codex mcp add simple-notify -- \
-  node ./build/index.js \
-  --enable-setup-web \
-  --setup-port \
-  21420
-```
-
-If you want env-based OpenAI key:
-
-```bash
-# from tools/simple-notify-mcp directory
-codex mcp add simple-notify --env OPENAI_API_KEY="$OPENAI_API_KEY" -- \
-  node ./build/index.js \
-  --enable-setup-web \
-  --setup-port \
-  21420
-```
-
-After config is saved, switch to normal mode (setup UI off):
-
-```bash
-# from tools/simple-notify-mcp directory
-codex mcp remove simple-notify
-codex mcp add simple-notify -- \
-  node ./build/index.js
-```
-
-First-run flow:
-- call `simple_notify_status`
-- open `setupWeb.url`
-- save settings in the panel
-- remove/re-add without `--enable-setup-web` for normal usage
-
-## Configuration schema
+## Configuration Schema
 
 Config file path (default):
 - `$XDG_CONFIG_HOME/simple-notify-mcp/config.json`
 - or `~/.config/simple-notify-mcp/config.json`
 
-`OPENAI_API_KEY` env still works and takes precedence over `keys.openai.apiKey`.
+Env key precedence:
+- `OPENAI_API_KEY` overrides `keys.openai.apiKey`
+- `FAL_KEY` / `FAL_API_KEY` override `keys.fal.apiKey`
 
 ```json
 {
   "tts": {
     "provider": "openai",
     "params": {
-      "model": "gpt-4o-mini-tts",
-      "voice": "alloy",
-      "speed": 1.0
+      "openai": {
+        "model": "gpt-4o-mini-tts",
+        "voice": "alloy",
+        "speed": 1,
+        "responseFormat": "mp3",
+        "instructions": "Speak calmly and clearly."
+      },
+      "falMinimax": {
+        "voiceId": "Wise_Woman",
+        "speed": 1,
+        "vol": 1,
+        "pitch": 0,
+        "englishNormalization": false,
+        "languageBoost": "auto",
+        "outputFormat": "url"
+      },
+      "falElevenlabs": {
+        "voice": "Rachel",
+        "stability": 0.5,
+        "similarityBoost": 0.75,
+        "style": 0,
+        "speed": 1,
+        "languageCode": "en",
+        "applyTextNormalization": "auto"
+      }
     }
   },
   "telegram": {
@@ -102,14 +133,20 @@ Config file path (default):
     "openai": {
       "apiKey": "sk-..."
     },
+    "fal": {
+      "apiKey": "fal_..."
+    },
     "telegram": {
       "botToken": "123:ABC"
     }
+  },
+  "misc": {
+    "ttsAsyncByDefault": true
   }
 }
 ```
 
-## Setup web UI flags (disabled by default)
+## Setup Web UI Flags (disabled by default)
 
 Flags:
 - `--enable-setup-web` (default off)
@@ -118,13 +155,13 @@ Flags:
 - `--setup-token` (optional; if omitted, generated per run)
 
 Behavior:
-- setup web starts only if enabled and config is incomplete.
-- binds locally only.
-- if `--setup-port` is busy, server uses the next free local port.
-- setup URL includes the current run token query param.
-- check `simple_notify_status` to discover setup URL and missing fields.
+- setup web starts only when enabled and config is incomplete
+- local bind only
+- if `--setup-port` is occupied, server uses the next free local port
+- setup URL includes the current run token query parameter
+- use `simple_notify_status` to discover `setupWeb.url` and `missingConfig`
 
-## Tool contracts
+## Tool Contracts
 
 ### simple_notify_status
 Input:
@@ -137,6 +174,9 @@ Input:
 ```json
 { "text": "Job done" }
 ```
+Output notes:
+- default mode is async (`misc.ttsAsyncByDefault=true`), so tool returns immediately after queuing speech
+- set `misc.ttsAsyncByDefault=false` in setup web Misc tab for blocking/sync behavior
 
 ### telegram_notify
 Input:
@@ -150,7 +190,7 @@ Input:
 npm run self-test -- --text "simple-notify-mcp self-test"
 ```
 
-Disable one side if needed:
+Disable one side:
 
 ```bash
 npm run self-test -- --no-tts
@@ -159,6 +199,7 @@ npm run self-test -- --no-telegram
 
 ## Notes
 
-- `tts_say` input is text-only; model/voice/speed are server config.
-- OpenAI TTS failure falls back to macOS `say` when available.
-- OpenAI playback uses macOS `afplay`.
+- `tts_say` is text-only; provider/model/voice/etc are server config.
+- `tts_say` runs async by default; switch in setup web `Misc` tab if you need sync mode.
+- OpenAI and FAL network errors fall back to macOS `say` when available.
+- OpenAI `responseFormat=pcm` is not directly playable by this local player path.

@@ -61,6 +61,28 @@ const setupToken = getString(args["setup-token"]);
 
 let setupWeb: SetupWebController | null = null;
 let setupWebError: string | null = null;
+let nextTtsJobId = 1;
+const ttsJobs = new Map<number, Promise<void>>();
+
+function startBackgroundTtsJob(text: string): number {
+  const jobId = nextTtsJobId;
+  nextTtsJobId += 1;
+
+  const job = (async () => {
+    try {
+      await speakText(text, runtime);
+      console.error(`[simple-notify-mcp] tts job ${jobId} completed`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[simple-notify-mcp] tts job ${jobId} failed: ${message}`);
+    } finally {
+      ttsJobs.delete(jobId);
+    }
+  })();
+
+  ttsJobs.set(jobId, job);
+  return jobId;
+}
 
 function computeCapabilities(): CapabilityState {
   return {
@@ -95,6 +117,9 @@ function statusPayload(): Record<string, unknown> {
     ok: true,
     version: VERSION,
     configPath,
+    ttsProvider: runtime.tts.provider,
+    ttsAsyncByDefault: runtime.misc.ttsAsyncByDefault,
+    ttsJobsInFlight: ttsJobs.size,
     ttsAvailable: capability.hasTts,
     telegramAvailable: capability.hasTelegram,
     missingConfig: capability.missingConfig,
@@ -128,13 +153,25 @@ const ttsTool = server.registerTool(
   "tts_say",
   {
     title: "Speak text",
-    description: "Speak a short message. Uses OpenAI TTS when available, else system TTS.",
+    description: "Speak a short message. Async by default from misc config; falls back to system TTS when needed.",
     inputSchema: ttsSchema
   },
   async (params: z.infer<typeof ttsSchema>) => {
     try {
+      if (runtime.misc.ttsAsyncByDefault) {
+        const jobId = startBackgroundTtsJob(params.text);
+        return okResponse({
+          accepted: true,
+          mode: "async",
+          jobId
+        });
+      }
+
       await speakText(params.text, runtime);
-      return okResponse({ accepted: true });
+      return okResponse({
+        accepted: true,
+        mode: "sync"
+      });
     } catch (err) {
       return errorResponse(err);
     }
