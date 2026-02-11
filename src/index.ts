@@ -21,7 +21,7 @@ import {
 } from "./runtime.js";
 import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const SERVER_NAME = "simple_notify";
 const SERVER_TITLE = "Simple Notify MCP";
 
@@ -216,7 +216,7 @@ function statusPayload(): Record<string, unknown> {
       hint: setupWebEnabled
         ? (setupWeb
           ? "Open setupWeb.url in your local browser to configure."
-          : "Setup web is enabled but not running (config may already be complete or startup failed).")
+          : "Setup web is enabled but not running (startup failed).")
         : "Start server with --enable-setup-web to enable local configuration UI."
     }
   };
@@ -460,34 +460,29 @@ function refreshToolAvailability(): void {
 refreshToolAvailability();
 
 if (setupWebEnabled) {
-  const initialMissing = computeCapabilities().missingConfig;
-  if (initialMissing.length > 0) {
-    try {
-      setupWeb = await startSetupWebServer(
-        {
-          host: setupHost,
-          port: setupPort,
-          token: setupToken,
-          configPath
+  try {
+    setupWeb = await startSetupWebServer(
+      {
+        host: setupHost,
+        port: setupPort,
+        token: setupToken,
+        configPath
+      },
+      {
+        getRuntime: () => runtime,
+        reloadRuntime: async () => {
+          await reloadRuntimeFromDisk("setup_web");
         },
-        {
-          getRuntime: () => runtime,
-          reloadRuntime: async () => {
-            await reloadRuntimeFromDisk("setup_web");
-          },
-          onRuntimeSaved: async nextRuntime => {
-            runtime = nextRuntime;
-            refreshToolAvailability();
-          }
+        onRuntimeSaved: async nextRuntime => {
+          runtime = nextRuntime;
+          refreshToolAvailability();
         }
-      );
-      console.error(`[simple-notify-mcp] setup web ready at ${setupWeb.state.url} (local only)`);
-    } catch (err) {
-      setupWebError = err instanceof Error ? err.message : String(err);
-      console.error(`[simple-notify-mcp] setup web failed: ${setupWebError}`);
-    }
-  } else {
-    console.error("[simple-notify-mcp] setup web enabled but not started (config already complete)");
+      }
+    );
+    console.error(`[simple-notify-mcp] setup web ready at ${setupWeb.state.url} (local only)`);
+  } catch (err) {
+    setupWebError = err instanceof Error ? err.message : String(err);
+    console.error(`[simple-notify-mcp] setup web failed: ${setupWebError}`);
   }
 }
 

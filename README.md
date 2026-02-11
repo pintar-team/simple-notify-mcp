@@ -163,7 +163,7 @@ Flags:
 - `--setup-token` (optional; if omitted, generated per run)
 
 Behavior:
-- setup web starts only when enabled and config is incomplete
+- setup web starts whenever `--enable-setup-web` is set
 - local bind only
 - if `--setup-port` is occupied, server uses the next free local port
 - setup URL includes the current run token query parameter

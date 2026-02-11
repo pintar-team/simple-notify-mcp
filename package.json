@@ -1,6 +1,6 @@
 {
   "name": "simple-notify-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "KISS MCP server for TTS + Telegram notifications",
   "keywords": [
     "mcp",
