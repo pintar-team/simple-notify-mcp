@@ -10,7 +10,6 @@
     "notification"
   ],
   "type": "module",
-  "bin": "./build/index.js",
   "files": [
     "build",
     "README.md",
@@ -42,5 +41,8 @@
   "publishConfig": {
     "access": "public"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "bin": {
+    "simple-notify-mcp": "build/index.js"
+  }
 }
