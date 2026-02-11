@@ -1015,7 +1015,11 @@ function missingProviderKeyError(provider: TtsProvider): string {
   return "FAL key missing (set FAL_KEY/FAL_API_KEY or keys.fal.apiKey)";
 }
 
-export async function speakText(text: string, runtime: RuntimeConfig): Promise<void> {
+async function speakWithConfiguredProvider(
+  text: string,
+  runtime: RuntimeConfig,
+  fallbackToSystem: boolean
+): Promise<void> {
   const trimmed = text.trim();
   if (!hasNonEmptyText(trimmed)) {
     return;
@@ -1050,13 +1054,21 @@ export async function speakText(text: string, runtime: RuntimeConfig): Promise<v
     await speakFalElevenlabs(trimmed, runtime, falKey);
     return;
   } catch (err) {
-    if (!hasSystem) {
+    if (!fallbackToSystem || !hasSystem) {
       throw err;
     }
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[simple-notify-mcp] ${provider} TTS failed, falling back to system TTS: ${message}`);
     await speakSystem(trimmed);
   }
+}
+
+export async function speakText(text: string, runtime: RuntimeConfig): Promise<void> {
+  await speakWithConfiguredProvider(text, runtime, true);
+}
+
+export async function testTtsProvider(text: string, runtime: RuntimeConfig): Promise<void> {
+  await speakWithConfiguredProvider(text, runtime, false);
 }
 
 export async function sendTelegram(text: string, runtime: RuntimeConfig): Promise<void> {
@@ -1085,6 +1097,506 @@ export async function sendTelegram(text: string, runtime: RuntimeConfig): Promis
     const errorText = await response.text();
     throw new Error(`Telegram error (${response.status}): ${errorText}`);
   }
+}
+
+export type TelegramReadOptions = {
+  offset?: number;
+  limit?: number;
+  timeoutSeconds?: number;
+};
+
+export type TelegramInboxMessage = {
+  updateId: number;
+  kind: "message" | "edited_message" | "channel_post" | "edited_channel_post";
+  chatId: string;
+  messageId?: number;
+  date?: number;
+  text?: string;
+  from?: string;
+};
+
+export type TelegramReadResult = {
+  fetched: number;
+  matched: number;
+  nextOffset?: number;
+  messages: TelegramInboxMessage[];
+};
+
+export type TelegramImageMessage = {
+  updateId: number;
+  kind: "message" | "edited_message" | "channel_post" | "edited_channel_post";
+  chatId: string;
+  messageId?: number;
+  date?: number;
+  from?: string;
+  caption?: string;
+  fileId: string;
+  width?: number;
+  height?: number;
+  fileSize?: number;
+};
+
+export type TelegramImageReadResult = {
+  fetched: number;
+  matched: number;
+  nextOffset?: number;
+  images: TelegramImageMessage[];
+};
+
+export type TelegramDownloadedFile = {
+  mimeType: string;
+  dataBase64: string;
+  bytes: number;
+  filePath: string;
+};
+
+function getIntegerFromUnknown(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isInteger(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function getStringFromUnknown(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed !== "") {
+      return trimmed;
+    }
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "bigint") {
+    return String(value);
+  }
+  return undefined;
+}
+
+function extractTelegramMessage(
+  update: JsonObject
+): { kind: TelegramInboxMessage["kind"]; message: JsonObject } | undefined {
+  const keys: TelegramInboxMessage["kind"][] = [
+    "message",
+    "edited_message",
+    "channel_post",
+    "edited_channel_post"
+  ];
+  for (const key of keys) {
+    const value = update[key];
+    if (isJsonObject(value)) {
+      return { kind: key, message: value };
+    }
+  }
+  return undefined;
+}
+
+function extractFromDisplayName(message: JsonObject): string | undefined {
+  const from = message.from;
+  if (!isJsonObject(from)) {
+    return undefined;
+  }
+  const username = getStringFromUnknown(from.username);
+  if (username) {
+    return username.startsWith("@") ? username : `@${username}`;
+  }
+  const first = getStringFromUnknown(from.first_name);
+  const last = getStringFromUnknown(from.last_name);
+  if (first && last) {
+    return `${first} ${last}`;
+  }
+  return first ?? last;
+}
+
+function getNumberFromUnknown(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractPreferredPhoto(
+  message: JsonObject
+): { fileId: string; width?: number; height?: number; fileSize?: number } | undefined {
+  const raw = message.photo;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+
+  let best: { fileId: string; width?: number; height?: number; fileSize?: number } | undefined;
+  let bestScore = -1;
+
+  for (const item of raw) {
+    if (!isJsonObject(item)) {
+      continue;
+    }
+    const fileId = getStringFromUnknown(item.file_id);
+    if (!fileId) {
+      continue;
+    }
+    const width = getNumberFromUnknown(item.width);
+    const height = getNumberFromUnknown(item.height);
+    const fileSize = getNumberFromUnknown(item.file_size);
+    const resolutionScore = (width ?? 0) * (height ?? 0);
+    const score = (fileSize ?? 0) > 0 ? (fileSize ?? 0) : resolutionScore;
+    if (score >= bestScore) {
+      bestScore = score;
+      best = {
+        fileId,
+        width,
+        height,
+        fileSize
+      };
+    }
+  }
+
+  return best;
+}
+
+export async function readTelegramUpdates(
+  runtime: RuntimeConfig,
+  options: TelegramReadOptions = {}
+): Promise<TelegramReadResult> {
+  const botToken = getTelegramBotToken(runtime);
+  const chatId = getString(runtime.telegram.chatId);
+  if (!botToken || !chatId) {
+    throw new Error("Telegram config missing");
+  }
+
+  const limit = Math.max(1, Math.min(100, Math.trunc(options.limit ?? 20)));
+  const timeoutSeconds = Math.max(0, Math.min(50, Math.trunc(options.timeoutSeconds ?? 0)));
+
+  const body: Record<string, unknown> = {
+    limit,
+    timeout: timeoutSeconds,
+    allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post"]
+  };
+  if (typeof options.offset === "number" && Number.isInteger(options.offset)) {
+    body.offset = options.offset;
+  }
+
+  const response = await fetchWithTimeout(
+    `https://api.telegram.org/bot${botToken}/getUpdates`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    },
+    Math.max(15_000, (timeoutSeconds + 15) * 1_000)
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Telegram getUpdates error (${response.status}): ${errorText}`);
+  }
+
+  const payloadRaw = await response.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadRaw);
+  } catch {
+    throw new Error(`Telegram getUpdates returned non-JSON payload: ${payloadRaw}`);
+  }
+
+  if (!isJsonObject(payload)) {
+    throw new Error(`Telegram getUpdates returned unexpected payload: ${payloadRaw}`);
+  }
+
+  if (payload.ok !== true) {
+    throw new Error(`Telegram getUpdates failed: ${payloadRaw}`);
+  }
+
+  const result = payload.result;
+  if (!Array.isArray(result)) {
+    throw new Error(`Telegram getUpdates returned unexpected result: ${payloadRaw}`);
+  }
+
+  const messages: TelegramInboxMessage[] = [];
+  let maxUpdateId: number | undefined;
+
+  for (const item of result) {
+    if (!isJsonObject(item)) {
+      continue;
+    }
+
+    const updateId = getIntegerFromUnknown(item.update_id);
+    if (updateId !== undefined) {
+      maxUpdateId = maxUpdateId === undefined ? updateId : Math.max(maxUpdateId, updateId);
+    }
+
+    const extracted = extractTelegramMessage(item);
+    if (!extracted) {
+      continue;
+    }
+
+    const chat = extracted.message.chat;
+    if (!isJsonObject(chat)) {
+      continue;
+    }
+
+    const messageChatId = getStringFromUnknown(chat.id);
+    if (!messageChatId || messageChatId !== chatId) {
+      continue;
+    }
+
+    if (updateId === undefined) {
+      continue;
+    }
+
+    const text = getStringFromUnknown(extracted.message.text) ?? getStringFromUnknown(extracted.message.caption);
+    const messageId = getIntegerFromUnknown(extracted.message.message_id);
+    const date = getIntegerFromUnknown(extracted.message.date);
+    const from = extractFromDisplayName(extracted.message);
+
+    messages.push({
+      updateId,
+      kind: extracted.kind,
+      chatId: messageChatId,
+      messageId,
+      date,
+      text,
+      from
+    });
+  }
+
+  return {
+    fetched: result.length,
+    matched: messages.length,
+    nextOffset: maxUpdateId === undefined ? undefined : maxUpdateId + 1,
+    messages
+  };
+}
+
+export async function readTelegramImageUpdates(
+  runtime: RuntimeConfig,
+  options: TelegramReadOptions = {}
+): Promise<TelegramImageReadResult> {
+  const botToken = getTelegramBotToken(runtime);
+  const chatId = getString(runtime.telegram.chatId);
+  if (!botToken || !chatId) {
+    throw new Error("Telegram config missing");
+  }
+
+  const limit = Math.max(1, Math.min(100, Math.trunc(options.limit ?? 20)));
+  const timeoutSeconds = Math.max(0, Math.min(50, Math.trunc(options.timeoutSeconds ?? 0)));
+
+  const body: Record<string, unknown> = {
+    limit,
+    timeout: timeoutSeconds,
+    allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post"]
+  };
+  if (typeof options.offset === "number" && Number.isInteger(options.offset)) {
+    body.offset = options.offset;
+  }
+
+  const response = await fetchWithTimeout(
+    `https://api.telegram.org/bot${botToken}/getUpdates`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    },
+    Math.max(15_000, (timeoutSeconds + 15) * 1_000)
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Telegram getUpdates error (${response.status}): ${errorText}`);
+  }
+
+  const payloadRaw = await response.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadRaw);
+  } catch {
+    throw new Error(`Telegram getUpdates returned non-JSON payload: ${payloadRaw}`);
+  }
+
+  if (!isJsonObject(payload)) {
+    throw new Error(`Telegram getUpdates returned unexpected payload: ${payloadRaw}`);
+  }
+
+  if (payload.ok !== true) {
+    throw new Error(`Telegram getUpdates failed: ${payloadRaw}`);
+  }
+
+  const result = payload.result;
+  if (!Array.isArray(result)) {
+    throw new Error(`Telegram getUpdates returned unexpected result: ${payloadRaw}`);
+  }
+
+  const images: TelegramImageMessage[] = [];
+  let maxUpdateId: number | undefined;
+
+  for (const item of result) {
+    if (!isJsonObject(item)) {
+      continue;
+    }
+
+    const updateId = getIntegerFromUnknown(item.update_id);
+    if (updateId !== undefined) {
+      maxUpdateId = maxUpdateId === undefined ? updateId : Math.max(maxUpdateId, updateId);
+    }
+
+    const extracted = extractTelegramMessage(item);
+    if (!extracted) {
+      continue;
+    }
+
+    const chat = extracted.message.chat;
+    if (!isJsonObject(chat)) {
+      continue;
+    }
+
+    const messageChatId = getStringFromUnknown(chat.id);
+    if (!messageChatId || messageChatId !== chatId) {
+      continue;
+    }
+
+    if (updateId === undefined) {
+      continue;
+    }
+
+    const photo = extractPreferredPhoto(extracted.message);
+    if (!photo) {
+      continue;
+    }
+
+    const messageId = getIntegerFromUnknown(extracted.message.message_id);
+    const date = getIntegerFromUnknown(extracted.message.date);
+    const from = extractFromDisplayName(extracted.message);
+    const caption = getStringFromUnknown(extracted.message.caption);
+
+    images.push({
+      updateId,
+      kind: extracted.kind,
+      chatId: messageChatId,
+      messageId,
+      date,
+      from,
+      caption,
+      fileId: photo.fileId,
+      width: photo.width,
+      height: photo.height,
+      fileSize: photo.fileSize
+    });
+  }
+
+  return {
+    fetched: result.length,
+    matched: images.length,
+    nextOffset: maxUpdateId === undefined ? undefined : maxUpdateId + 1,
+    images
+  };
+}
+
+function inferImageMimeType(contentType: string | null): string {
+  if (!contentType) {
+    return "image/jpeg";
+  }
+  const normalized = contentType.toLowerCase();
+  if (normalized.startsWith("image/")) {
+    return normalized;
+  }
+  return "image/jpeg";
+}
+
+export async function downloadTelegramFileById(
+  runtime: RuntimeConfig,
+  fileId: string,
+  maxBytes = 8_000_000
+): Promise<TelegramDownloadedFile> {
+  const botToken = getTelegramBotToken(runtime);
+  if (!botToken) {
+    throw new Error("Telegram config missing");
+  }
+  const normalizedFileId = getString(fileId);
+  if (!normalizedFileId) {
+    throw new Error("Telegram file_id is required");
+  }
+
+  const fileMetaResponse = await fetchWithTimeout(
+    `https://api.telegram.org/bot${botToken}/getFile`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ file_id: normalizedFileId })
+    },
+    20_000
+  );
+
+  if (!fileMetaResponse.ok) {
+    const errorText = await fileMetaResponse.text();
+    throw new Error(`Telegram getFile error (${fileMetaResponse.status}): ${errorText}`);
+  }
+
+  const fileMetaRaw = await fileMetaResponse.text();
+  let fileMetaPayload: unknown;
+  try {
+    fileMetaPayload = JSON.parse(fileMetaRaw);
+  } catch {
+    throw new Error(`Telegram getFile returned non-JSON payload: ${fileMetaRaw}`);
+  }
+
+  if (!isJsonObject(fileMetaPayload) || fileMetaPayload.ok !== true || !isJsonObject(fileMetaPayload.result)) {
+    throw new Error(`Telegram getFile returned unexpected payload: ${fileMetaRaw}`);
+  }
+
+  const filePath = getStringFromUnknown(fileMetaPayload.result.file_path);
+  const fileSizeHint = getNumberFromUnknown(fileMetaPayload.result.file_size);
+  if (!filePath) {
+    throw new Error("Telegram getFile response missing file_path");
+  }
+  if (fileSizeHint !== undefined && fileSizeHint > maxBytes) {
+    throw new Error(`Telegram image is too large (${fileSizeHint} bytes, max ${maxBytes})`);
+  }
+
+  const fileResponse = await fetchWithTimeout(
+    `https://api.telegram.org/file/bot${botToken}/${filePath}`,
+    { method: "GET" },
+    30_000
+  );
+
+  if (!fileResponse.ok) {
+    const errorText = await fileResponse.text();
+    throw new Error(`Telegram file download error (${fileResponse.status}): ${errorText}`);
+  }
+
+  const contentLength = fileResponse.headers.get("content-length");
+  const headerBytes = contentLength ? Number(contentLength) : undefined;
+  if (headerBytes !== undefined && Number.isFinite(headerBytes) && headerBytes > maxBytes) {
+    throw new Error(`Telegram image is too large (${headerBytes} bytes, max ${maxBytes})`);
+  }
+
+  const data = Buffer.from(await fileResponse.arrayBuffer());
+  if (data.byteLength > maxBytes) {
+    throw new Error(`Telegram image is too large (${data.byteLength} bytes, max ${maxBytes})`);
+  }
+
+  return {
+    mimeType: inferImageMimeType(fileResponse.headers.get("content-type")),
+    dataBase64: data.toString("base64"),
+    bytes: data.byteLength,
+    filePath
+  };
 }
 
 function withDefinedProps<T extends Record<string, unknown>>(input: T): Partial<T> {

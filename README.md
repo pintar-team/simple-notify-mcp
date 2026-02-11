@@ -7,6 +7,8 @@ KISS MCP server for spoken and Telegram notifications.
 - `simple_notify_status`: always available; returns capabilities, missing config, and setup-web state.
 - `tts_say`: text-only input; async by default, uses configured provider (`openai`, `fal-minimax`, `fal-elevenlabs`) with macOS `say` fallback.
 - `telegram_notify`: available when Telegram bot token + chat id are configured.
+- `telegram_read_incoming`: available when Telegram bot token + chat id are configured; reads incoming updates for configured chat.
+- `telegram_read_media`: available when Telegram bot token + chat id are configured; reads image updates and can return MCP image content blocks.
 
 ## Quickstart (npx, recommended)
 
@@ -190,10 +192,42 @@ Input:
 { "text": "Job done" }
 ```
 
+### telegram_read_incoming
+Input:
+```json
+{
+  "limit": 20,
+  "timeoutSeconds": 0,
+  "advanceCursor": true
+}
+```
+Output notes:
+- reads updates filtered to configured `telegram.chatId`
+- tracks cursor in memory for the current server run
+- set `advanceCursor=false` to peek without moving cursor
+
+### telegram_read_media
+Input:
+```json
+{
+  "limit": 20,
+  "timeoutSeconds": 0,
+  "advanceCursor": true,
+  "includeData": true,
+  "maxImages": 1,
+  "maxBytesPerImage": 8000000
+}
+```
+Output notes:
+- only image media is returned (text-only updates are ignored)
+- when `includeData=true`, tool can return MCP `image` content blocks (base64 + mime type)
+- large files are skipped based on `maxBytesPerImage`
+- media cursor is tracked in memory for current server run
+
 ## Self-test
 
 ```bash
-npm run self-test -- --text "simple-notify-mcp self-test"
+npm run self-test -- --text "Task complete. Build passed and your results are ready."
 ```
 
 Disable one side:
@@ -209,3 +243,4 @@ npm run self-test -- --no-telegram
 - `tts_say` runs async by default; switch in setup web `Misc` tab if you need sync mode.
 - OpenAI and FAL network errors fall back to macOS `say` when available.
 - OpenAI `responseFormat=pcm` is not directly playable by this local player path.
+- Runtime config is reloaded from disk before tool calls, so manual config edits are picked up without restarting the MCP process.

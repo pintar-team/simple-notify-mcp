@@ -13,10 +13,14 @@ import {
   OPENAI_RESPONSE_FORMATS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  getFalKey,
   getMissingConfigFields,
-  getNumber,
+  getOpenAIKey,
   getString,
+  getTelegramBotToken,
   saveRuntimeConfig,
+  sendTelegram,
+  testTtsProvider,
   type RuntimeConfig,
   type TtsProvider
 } from "./runtime.js";
@@ -46,10 +50,13 @@ export type SetupWebController = {
 type SetupWebHandlers = {
   getRuntime: () => RuntimeConfig;
   onRuntimeSaved: (runtime: RuntimeConfig) => Promise<void> | void;
+  reloadRuntime?: () => Promise<void> | void;
 };
 
 type SubmittedSetupConfig = {
   token?: string;
+  runTests?: string;
+  testText?: string;
   provider?: string;
   openaiModel?: string;
   openaiVoice?: string;
@@ -89,6 +96,9 @@ type SubmittedSetupConfig = {
   telegramBotToken?: string;
   telegramChatId?: string;
   ttsAsyncByDefault?: string;
+  clearOpenaiApiKey?: string;
+  clearFalApiKey?: string;
+  clearTelegramBotToken?: string;
 };
 
 function isErrnoException(value: unknown): value is NodeJS.ErrnoException {
@@ -165,6 +175,18 @@ function parseBooleanString(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
+function parseNumberString(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().replace(",", ".");
+  if (normalized === "") {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function normalizeProvider(value: string | undefined): TtsProvider | undefined {
   if (value === "openai" || value === "fal-minimax" || value === "fal-elevenlabs") {
     return value;
@@ -228,8 +250,8 @@ function normalizeFalElevenApplyTextNormalization(value: string | undefined): "a
     : undefined;
 }
 
-function boolToString(value: boolean | undefined): string {
-  return value ? "true" : "false";
+function boolChecked(value: boolean | undefined): string {
+  return value ? " checked" : "";
 }
 
 function buildOptions(options: readonly string[], selected: string | undefined): string {
@@ -237,6 +259,13 @@ function buildOptions(options: readonly string[], selected: string | undefined):
     const isSelected = option === selected ? " selected" : "";
     return `<option value="${escapeHtml(option)}"${isSelected}>${escapeHtml(option)}</option>`;
   }).join("");
+}
+
+function toScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll("<", "\\u003c")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
@@ -284,15 +313,15 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
 
   const openaiModel = getString(incoming.openaiModel) ?? current.tts.params.openai.model;
   const openaiVoice = getString(incoming.openaiVoice) ?? current.tts.params.openai.voice;
-  const openaiSpeed = getNumber(incoming.openaiSpeed) ?? current.tts.params.openai.speed;
+  const openaiSpeed = parseNumberString(getString(incoming.openaiSpeed)) ?? current.tts.params.openai.speed;
   const openaiResponseFormat = normalizeOpenAiFormat(getString(incoming.openaiResponseFormat)) ??
     current.tts.params.openai.responseFormat;
   const openaiInstructions = getString(incoming.openaiInstructions) ?? current.tts.params.openai.instructions;
 
   const falMinimaxVoiceId = getString(incoming.falMinimaxVoiceId) ?? current.tts.params.falMinimax.voiceId;
-  const falMinimaxSpeed = getNumber(incoming.falMinimaxSpeed) ?? current.tts.params.falMinimax.speed;
-  const falMinimaxVol = getNumber(incoming.falMinimaxVol) ?? current.tts.params.falMinimax.vol;
-  const falMinimaxPitch = getNumber(incoming.falMinimaxPitch) ?? current.tts.params.falMinimax.pitch;
+  const falMinimaxSpeed = parseNumberString(getString(incoming.falMinimaxSpeed)) ?? current.tts.params.falMinimax.speed;
+  const falMinimaxVol = parseNumberString(getString(incoming.falMinimaxVol)) ?? current.tts.params.falMinimax.vol;
+  const falMinimaxPitch = parseNumberString(getString(incoming.falMinimaxPitch)) ?? current.tts.params.falMinimax.pitch;
   const falMinimaxEmotion = normalizeFalMinimaxEmotion(getString(incoming.falMinimaxEmotion)) ??
     current.tts.params.falMinimax.emotion;
   const falMinimaxEnglishNormalization = parseBooleanString(getString(incoming.falMinimaxEnglishNormalization)) ??
@@ -302,35 +331,36 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
   const falMinimaxOutputFormat = normalizeFalMinimaxOutputFormat(getString(incoming.falMinimaxOutputFormat)) ??
     current.tts.params.falMinimax.outputFormat;
   const falMinimaxAudioFormat = getString(incoming.falMinimaxAudioFormat) ?? current.tts.params.falMinimax.audioFormat;
-  const falMinimaxAudioSampleRate = getNumber(incoming.falMinimaxAudioSampleRate) ??
+  const falMinimaxAudioSampleRate = parseNumberString(getString(incoming.falMinimaxAudioSampleRate)) ??
     current.tts.params.falMinimax.audioSampleRate;
-  const falMinimaxAudioChannel = getNumber(incoming.falMinimaxAudioChannel) ??
+  const falMinimaxAudioChannel = parseNumberString(getString(incoming.falMinimaxAudioChannel)) ??
     current.tts.params.falMinimax.audioChannel;
-  const falMinimaxAudioBitrate = getNumber(incoming.falMinimaxAudioBitrate) ??
+  const falMinimaxAudioBitrate = parseNumberString(getString(incoming.falMinimaxAudioBitrate)) ??
     current.tts.params.falMinimax.audioBitrate;
   const falMinimaxNormalizationEnabled = parseBooleanString(getString(incoming.falMinimaxNormalizationEnabled)) ??
     current.tts.params.falMinimax.normalizationEnabled;
-  const falMinimaxNormalizationTargetLoudness = getNumber(incoming.falMinimaxNormalizationTargetLoudness) ??
+  const falMinimaxNormalizationTargetLoudness = parseNumberString(getString(incoming.falMinimaxNormalizationTargetLoudness)) ??
     current.tts.params.falMinimax.normalizationTargetLoudness;
-  const falMinimaxNormalizationTargetRange = getNumber(incoming.falMinimaxNormalizationTargetRange) ??
+  const falMinimaxNormalizationTargetRange = parseNumberString(getString(incoming.falMinimaxNormalizationTargetRange)) ??
     current.tts.params.falMinimax.normalizationTargetRange;
-  const falMinimaxNormalizationTargetPeak = getNumber(incoming.falMinimaxNormalizationTargetPeak) ??
+  const falMinimaxNormalizationTargetPeak = parseNumberString(getString(incoming.falMinimaxNormalizationTargetPeak)) ??
     current.tts.params.falMinimax.normalizationTargetPeak;
-  const falMinimaxVoiceModifyPitch = getNumber(incoming.falMinimaxVoiceModifyPitch) ??
+  const falMinimaxVoiceModifyPitch = parseNumberString(getString(incoming.falMinimaxVoiceModifyPitch)) ??
     current.tts.params.falMinimax.voiceModifyPitch;
-  const falMinimaxVoiceModifyIntensity = getNumber(incoming.falMinimaxVoiceModifyIntensity) ??
+  const falMinimaxVoiceModifyIntensity = parseNumberString(getString(incoming.falMinimaxVoiceModifyIntensity)) ??
     current.tts.params.falMinimax.voiceModifyIntensity;
-  const falMinimaxVoiceModifyTimbre = getNumber(incoming.falMinimaxVoiceModifyTimbre) ??
+  const falMinimaxVoiceModifyTimbre = parseNumberString(getString(incoming.falMinimaxVoiceModifyTimbre)) ??
     current.tts.params.falMinimax.voiceModifyTimbre;
   const falMinimaxPronunciationToneList = parseToneListInput(getString(incoming.falMinimaxPronunciationToneList)) ??
     current.tts.params.falMinimax.pronunciationToneList;
 
   const falElevenVoice = getString(incoming.falElevenVoice) ?? current.tts.params.falElevenlabs.voice;
-  const falElevenStability = getNumber(incoming.falElevenStability) ?? current.tts.params.falElevenlabs.stability;
-  const falElevenSimilarityBoost = getNumber(incoming.falElevenSimilarityBoost) ??
+  const falElevenStability = parseNumberString(getString(incoming.falElevenStability)) ??
+    current.tts.params.falElevenlabs.stability;
+  const falElevenSimilarityBoost = parseNumberString(getString(incoming.falElevenSimilarityBoost)) ??
     current.tts.params.falElevenlabs.similarityBoost;
-  const falElevenStyle = getNumber(incoming.falElevenStyle) ?? current.tts.params.falElevenlabs.style;
-  const falElevenSpeed = getNumber(incoming.falElevenSpeed) ?? current.tts.params.falElevenlabs.speed;
+  const falElevenStyle = parseNumberString(getString(incoming.falElevenStyle)) ?? current.tts.params.falElevenlabs.style;
+  const falElevenSpeed = parseNumberString(getString(incoming.falElevenSpeed)) ?? current.tts.params.falElevenlabs.speed;
   const falElevenTimestamps = parseBooleanString(getString(incoming.falElevenTimestamps)) ??
     current.tts.params.falElevenlabs.timestamps;
   const falElevenLanguageCode = getString(incoming.falElevenLanguageCode) ??
@@ -339,10 +369,20 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
     getString(incoming.falElevenApplyTextNormalization)
   ) ?? current.tts.params.falElevenlabs.applyTextNormalization;
 
-  // Empty secret fields keep existing values.
-  const openaiApiKey = getString(incoming.openaiApiKey) ?? current.keys.openai?.apiKey;
-  const falApiKey = getString(incoming.falApiKey) ?? current.keys.fal?.apiKey;
-  const telegramBotToken = getString(incoming.telegramBotToken) ?? current.keys.telegram?.botToken;
+  const clearOpenaiApiKey = parseBooleanString(getString(incoming.clearOpenaiApiKey)) ?? false;
+  const clearFalApiKey = parseBooleanString(getString(incoming.clearFalApiKey)) ?? false;
+  const clearTelegramBotToken = parseBooleanString(getString(incoming.clearTelegramBotToken)) ?? false;
+
+  // Empty secret fields keep existing values unless an explicit clear toggle is enabled.
+  const openaiApiKey = clearOpenaiApiKey
+    ? undefined
+    : (getString(incoming.openaiApiKey) ?? current.keys.openai?.apiKey);
+  const falApiKey = clearFalApiKey
+    ? undefined
+    : (getString(incoming.falApiKey) ?? current.keys.fal?.apiKey);
+  const telegramBotToken = clearTelegramBotToken
+    ? undefined
+    : (getString(incoming.telegramBotToken) ?? current.keys.telegram?.botToken);
   const telegramChatId = getString(incoming.telegramChatId) ?? current.telegram.chatId;
   const ttsAsyncByDefault = parseBooleanString(getString(incoming.ttsAsyncByDefault)) ??
     current.misc.ttsAsyncByDefault;
@@ -412,57 +452,143 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
   };
 }
 
+type SetupTestName = "tts" | "telegram";
+
+type SetupTestResult = {
+  ok: boolean;
+  message: string;
+};
+
+type SetupTestPayload = {
+  tts?: SetupTestResult;
+  telegram?: SetupTestResult;
+};
+
+function parseRequestedTests(value: string | undefined): SetupTestName[] {
+  if (!value) {
+    return [];
+  }
+  const out = new Set<SetupTestName>();
+  for (const raw of value.split(",")) {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "tts" || normalized === "telegram") {
+      out.add(normalized);
+    }
+  }
+  return Array.from(out);
+}
+
+async function runSetupTests(runtime: RuntimeConfig, tests: SetupTestName[], testText: string): Promise<SetupTestPayload> {
+  const result: SetupTestPayload = {};
+  for (const testName of tests) {
+    if (testName === "tts") {
+      try {
+        await testTtsProvider(testText, runtime);
+        result.tts = { ok: true, message: "TTS test succeeded." };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        result.tts = { ok: false, message };
+      }
+      continue;
+    }
+
+    try {
+      await sendTelegram(testText, runtime);
+      result.telegram = { ok: true, message: "Telegram test sent." };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      result.telegram = { ok: false, message };
+    }
+  }
+  return result;
+}
+
+type SecretStatus = {
+  label: "Missing" | "Set" | "Set (config)" | "Set (env)";
+  className: "bad" | "ok";
+};
+
+function getOpenAiSecretStatus(runtime: RuntimeConfig): SecretStatus {
+  if (getString(runtime.keys.openai?.apiKey)) {
+    return { label: "Set (config)", className: "ok" };
+  }
+  if (getOpenAIKey(runtime)) {
+    return { label: "Set (env)", className: "ok" };
+  }
+  return { label: "Missing", className: "bad" };
+}
+
+function getFalSecretStatus(runtime: RuntimeConfig): SecretStatus {
+  if (getString(runtime.keys.fal?.apiKey)) {
+    return { label: "Set (config)", className: "ok" };
+  }
+  if (getFalKey(runtime)) {
+    return { label: "Set (env)", className: "ok" };
+  }
+  return { label: "Missing", className: "bad" };
+}
+
+function getTelegramSecretStatus(runtime: RuntimeConfig): SecretStatus {
+  if (getTelegramBotToken(runtime)) {
+    return { label: "Set", className: "ok" };
+  }
+  return { label: "Missing", className: "bad" };
+}
+
+type KeyStatusPayload = {
+  openai: SecretStatus;
+  fal: SecretStatus;
+  telegram: SecretStatus;
+};
+
+function buildKeyStatusPayload(runtime: RuntimeConfig): KeyStatusPayload {
+  return {
+    openai: getOpenAiSecretStatus(runtime),
+    fal: getFalSecretStatus(runtime),
+    telegram: getTelegramSecretStatus(runtime)
+  };
+}
+
 function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfig): string {
   const missing = getMissingConfigFields(runtime);
-  const missingText = missing.length > 0 ? missing.join(", ") : "none";
+  const keyStatus = buildKeyStatusPayload(runtime);
 
-  const provider = escapeHtml(runtime.tts.provider);
-  const openaiModel = escapeHtml(runtime.tts.params.openai.model ?? OPENAI_TTS_MODELS[0]);
-  const openaiVoice = escapeHtml(runtime.tts.params.openai.voice ?? OPENAI_TTS_VOICES[0]);
-  const openaiSpeed = escapeHtml(String(runtime.tts.params.openai.speed ?? 1.0));
-  const openaiResponseFormat = escapeHtml(runtime.tts.params.openai.responseFormat ?? "mp3");
-  const openaiInstructions = escapeHtml(runtime.tts.params.openai.instructions ?? "");
+  const provider = runtime.tts.provider;
+  const openaiModel = runtime.tts.params.openai.model ?? OPENAI_TTS_MODELS[0];
+  const openaiVoice = runtime.tts.params.openai.voice ?? OPENAI_TTS_VOICES[0];
+  const openaiSpeed = String(runtime.tts.params.openai.speed ?? 1.0);
+  const openaiResponseFormat = runtime.tts.params.openai.responseFormat ?? "mp3";
+  const openaiInstructions = runtime.tts.params.openai.instructions ?? "";
 
-  const falMinimaxVoiceId = escapeHtml(runtime.tts.params.falMinimax.voiceId ?? "Wise_Woman");
-  const falMinimaxSpeed = escapeHtml(String(runtime.tts.params.falMinimax.speed ?? 1.0));
-  const falMinimaxVol = escapeHtml(String(runtime.tts.params.falMinimax.vol ?? 1.0));
-  const falMinimaxPitch = escapeHtml(String(runtime.tts.params.falMinimax.pitch ?? 0));
-  const falMinimaxEmotion = escapeHtml(runtime.tts.params.falMinimax.emotion ?? "");
-  const falMinimaxEnglishNormalization = escapeHtml(boolToString(runtime.tts.params.falMinimax.englishNormalization));
-  const falMinimaxLanguageBoost = escapeHtml(runtime.tts.params.falMinimax.languageBoost ?? "auto");
-  const falMinimaxOutputFormat = escapeHtml(runtime.tts.params.falMinimax.outputFormat ?? "url");
-  const falMinimaxAudioFormat = escapeHtml(runtime.tts.params.falMinimax.audioFormat ?? "mp3");
-  const falMinimaxAudioSampleRate = escapeHtml(String(runtime.tts.params.falMinimax.audioSampleRate ?? 32000));
-  const falMinimaxAudioChannel = escapeHtml(String(runtime.tts.params.falMinimax.audioChannel ?? 1));
-  const falMinimaxAudioBitrate = escapeHtml(String(runtime.tts.params.falMinimax.audioBitrate ?? 128000));
-  const falMinimaxNormalizationEnabled = escapeHtml(boolToString(runtime.tts.params.falMinimax.normalizationEnabled));
-  const falMinimaxNormalizationTargetLoudness = escapeHtml(
-    String(runtime.tts.params.falMinimax.normalizationTargetLoudness ?? -18)
-  );
-  const falMinimaxNormalizationTargetRange = escapeHtml(
-    String(runtime.tts.params.falMinimax.normalizationTargetRange ?? 8)
-  );
-  const falMinimaxNormalizationTargetPeak = escapeHtml(
-    String(runtime.tts.params.falMinimax.normalizationTargetPeak ?? -0.5)
-  );
-  const falMinimaxVoiceModifyPitch = escapeHtml(String(runtime.tts.params.falMinimax.voiceModifyPitch ?? 0));
-  const falMinimaxVoiceModifyIntensity = escapeHtml(String(runtime.tts.params.falMinimax.voiceModifyIntensity ?? 0));
-  const falMinimaxVoiceModifyTimbre = escapeHtml(String(runtime.tts.params.falMinimax.voiceModifyTimbre ?? 0));
-  const falMinimaxPronunciationToneList = escapeHtml(
-    toneListToInput(runtime.tts.params.falMinimax.pronunciationToneList)
-  );
+  const falMinimaxVoiceId = runtime.tts.params.falMinimax.voiceId ?? "Wise_Woman";
+  const falMinimaxSpeed = String(runtime.tts.params.falMinimax.speed ?? 1.0);
+  const falMinimaxVol = String(runtime.tts.params.falMinimax.vol ?? 1.0);
+  const falMinimaxPitch = String(runtime.tts.params.falMinimax.pitch ?? 0);
+  const falMinimaxEmotion = runtime.tts.params.falMinimax.emotion ?? "";
+  const falMinimaxLanguageBoost = runtime.tts.params.falMinimax.languageBoost ?? "auto";
+  const falMinimaxOutputFormat = runtime.tts.params.falMinimax.outputFormat ?? "url";
+  const falMinimaxAudioFormat = runtime.tts.params.falMinimax.audioFormat ?? "mp3";
+  const falMinimaxAudioSampleRate = String(runtime.tts.params.falMinimax.audioSampleRate ?? 32000);
+  const falMinimaxAudioChannel = String(runtime.tts.params.falMinimax.audioChannel ?? 1);
+  const falMinimaxAudioBitrate = String(runtime.tts.params.falMinimax.audioBitrate ?? 128000);
+  const falMinimaxNormalizationTargetLoudness = String(runtime.tts.params.falMinimax.normalizationTargetLoudness ?? -18);
+  const falMinimaxNormalizationTargetRange = String(runtime.tts.params.falMinimax.normalizationTargetRange ?? 8);
+  const falMinimaxNormalizationTargetPeak = String(runtime.tts.params.falMinimax.normalizationTargetPeak ?? -0.5);
+  const falMinimaxVoiceModifyPitch = String(runtime.tts.params.falMinimax.voiceModifyPitch ?? 0);
+  const falMinimaxVoiceModifyIntensity = String(runtime.tts.params.falMinimax.voiceModifyIntensity ?? 0);
+  const falMinimaxVoiceModifyTimbre = String(runtime.tts.params.falMinimax.voiceModifyTimbre ?? 0);
+  const falMinimaxPronunciationToneList = toneListToInput(runtime.tts.params.falMinimax.pronunciationToneList);
 
-  const falElevenVoice = escapeHtml(runtime.tts.params.falElevenlabs.voice ?? "Rachel");
-  const falElevenStability = escapeHtml(String(runtime.tts.params.falElevenlabs.stability ?? 0.5));
-  const falElevenSimilarityBoost = escapeHtml(String(runtime.tts.params.falElevenlabs.similarityBoost ?? 0.75));
-  const falElevenStyle = escapeHtml(String(runtime.tts.params.falElevenlabs.style ?? 0));
-  const falElevenSpeed = escapeHtml(String(runtime.tts.params.falElevenlabs.speed ?? 1));
-  const falElevenTimestamps = escapeHtml(boolToString(runtime.tts.params.falElevenlabs.timestamps));
-  const falElevenLanguageCode = escapeHtml(runtime.tts.params.falElevenlabs.languageCode ?? "");
-  const falElevenApplyTextNormalization = escapeHtml(runtime.tts.params.falElevenlabs.applyTextNormalization ?? "auto");
-  const ttsAsyncByDefault = escapeHtml(boolToString(runtime.misc.ttsAsyncByDefault));
+  const falElevenVoice = runtime.tts.params.falElevenlabs.voice ?? "Rachel";
+  const falElevenStability = String(runtime.tts.params.falElevenlabs.stability ?? 0.5);
+  const falElevenSimilarityBoost = String(runtime.tts.params.falElevenlabs.similarityBoost ?? 0.75);
+  const falElevenStyle = String(runtime.tts.params.falElevenlabs.style ?? 0);
+  const falElevenSpeed = String(runtime.tts.params.falElevenlabs.speed ?? 1);
+  const falElevenLanguageCode = runtime.tts.params.falElevenlabs.languageCode ?? "";
+  const falElevenApplyTextNormalization = runtime.tts.params.falElevenlabs.applyTextNormalization ?? "auto";
 
-  const chatId = escapeHtml(runtime.telegram.chatId ?? "");
+  const chatId = runtime.telegram.chatId ?? "";
+  const testTextDefault = "Task complete. Build passed and your results are ready.";
 
   const openaiModelOptions = buildOptions(OPENAI_TTS_MODELS, openaiModel);
   const openaiVoiceOptions = buildOptions(OPENAI_TTS_VOICES, openaiVoice);
@@ -484,15 +610,16 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
     FAL_MINIMAX_AUDIO_BITRATES.map(value => String(value)),
     falMinimaxAudioBitrate
   );
-  const minimaxNormalizationEnabledOptions = buildOptions(["true", "false"], falMinimaxNormalizationEnabled);
   const falElevenNormalizationOptions = buildOptions(
     FAL_ELEVEN_APPLY_TEXT_NORMALIZATION_OPTIONS,
     falElevenApplyTextNormalization
   );
   const falElevenVoiceOptions = buildOptions(FAL_ELEVEN_VOICES, falElevenVoice);
-  const falElevenTimestampsOptions = buildOptions(["false", "true"], falElevenTimestamps);
-  const minimaxEnglishNormalizationOptions = buildOptions(["false", "true"], falMinimaxEnglishNormalization);
-  const ttsAsyncByDefaultOptions = buildOptions(["true", "false"], ttsAsyncByDefault);
+
+  const initialState = toScriptJson({
+    missingConfig: missing,
+    keyStatus
+  });
 
   return `<!doctype html>
 <html>
@@ -502,85 +629,160 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
     <title>simple-notify-mcp setup</title>
     <style>
       :root {
-        --bg: #f5f6f8;
+        --bg: #f5f7f8;
         --card: #ffffff;
         --ink: #111827;
-        --muted: #6b7280;
-        --line: #d1d5db;
+        --muted: #64748b;
+        --line: #d1d9df;
         --accent: #0f766e;
         --accent-ink: #ffffff;
-        --danger: #991b1b;
         --ok: #14532d;
+        --warn: #9a3412;
+        --danger: #991b1b;
+        --chip: #f1f5f9;
+        --chip-ink: #0f172a;
       }
       * { box-sizing: border-box; }
-      body {
+      [hidden] { display: none !important; }
+      html, body {
         margin: 0;
-        background:
-          radial-gradient(circle at 20% -10%, #d1fae5 0, transparent 30%),
-          radial-gradient(circle at 100% 0%, #e0f2fe 0, transparent 35%),
-          var(--bg);
+        padding: 0;
+      }
+      body {
         color: var(--ink);
         font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 10% -10%, #d1fae5 0, transparent 34%),
+          radial-gradient(circle at 100% 0%, #dbeafe 0, transparent 38%),
+          var(--bg);
       }
       .wrap {
-        max-width: 1040px;
-        margin: 28px auto;
-        padding: 0 16px 24px;
+        width: min(1080px, calc(100% - 24px));
+        margin: 20px auto 40px;
       }
       .hero {
-        background: linear-gradient(135deg, #0f766e, #065f46);
+        background: linear-gradient(135deg, #0f766e 0%, #065f46 100%);
         color: var(--accent-ink);
-        border-radius: 14px;
+        border-radius: 16px;
         padding: 18px 20px;
-        box-shadow: 0 16px 28px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 18px 26px rgba(0, 0, 0, 0.08);
       }
-      .hero h1 { margin: 0; font-size: 24px; }
-      .hero p { margin: 8px 0 0; opacity: 0.9; }
+      .hero h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 700;
+      }
+      .hero p {
+        margin: 8px 0 0;
+        font-size: 15px;
+        opacity: 0.92;
+      }
       .card {
+        margin-top: 14px;
         background: var(--card);
         border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 16px;
-        margin-top: 16px;
+        border-radius: 16px;
+        padding: 14px;
       }
-      .meta {
+      .meta-row {
         display: grid;
         grid-template-columns: 1fr;
-        gap: 8px;
+        gap: 10px;
+      }
+      .meta-item {
         font-size: 13px;
         color: var(--muted);
       }
-      code {
-        background: #f3f4f6;
+      .meta-item code {
+        font-size: 13px;
         padding: 2px 6px;
         border-radius: 6px;
-        color: #111827;
+        background: #f3f4f6;
+        color: var(--ink);
+      }
+      .missing-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .missing-chip {
+        border: 1px solid #cbd5e1;
+        background: var(--chip);
+        color: var(--chip-ink);
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .missing-empty {
+        color: var(--ok);
+        font-size: 12px;
+      }
+      .steps {
+        margin: 12px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .step {
+        border: 1px solid #d7e2e8;
+        border-radius: 12px;
+        padding: 10px;
+        display: grid;
+        gap: 3px;
+        background: #f8fafc;
+      }
+      .step .step-title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .step .step-note {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .step.done {
+        border-color: #86efac;
+        background: #f0fdf4;
+      }
+      .step.active {
+        border-color: #5eead4;
+        background: #ecfeff;
+      }
+      #next-hint {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
       }
       .tabs {
         display: flex;
-        gap: 8px;
         flex-wrap: wrap;
+        gap: 8px;
         margin-top: 14px;
       }
       .tab {
         border: 1px solid var(--line);
-        border-radius: 999px;
-        background: #fff;
+        background: #ffffff;
         color: var(--ink);
+        border-radius: 999px;
         padding: 8px 14px;
-        cursor: pointer;
         font-size: 14px;
+        cursor: pointer;
       }
       .tab.active {
         background: var(--accent);
-        color: #fff;
         border-color: var(--accent);
+        color: var(--accent-ink);
       }
       .panel {
         display: none;
-        margin-top: 14px;
+        margin-top: 12px;
       }
-      .panel.active { display: block; }
+      .panel.active {
+        display: block;
+      }
       .grid {
         display: grid;
         grid-template-columns: 1fr;
@@ -588,50 +790,29 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
       }
       .grid.two {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        align-items: start;
       }
       .grid.three {
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        align-items: start;
       }
-      label {
-        display: grid;
-        gap: 6px;
-        font-size: 13px;
+      .section {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 12px;
+        background: #fafbfc;
+      }
+      .section h3 {
+        margin: 0 0 8px;
+        font-size: 15px;
+      }
+      .section p {
+        margin: 0;
         color: var(--muted);
-      }
-      input, select, textarea {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 10px 12px;
-        font-size: 14px;
-        color: var(--ink);
-        background: #fff;
-      }
-      textarea {
-        min-height: 84px;
-        resize: vertical;
+        font-size: 12px;
       }
       .stack {
         display: flex;
         flex-direction: column;
         gap: 10px;
-      }
-      .section {
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        padding: 12px;
-        background: #fafafa;
-      }
-      .section h3 {
-        margin: 0 0 10px;
-        font-size: 14px;
-        color: #1f2937;
-      }
-      .section p {
-        margin: 0 0 10px;
-        color: #6b7280;
-        font-size: 12px;
       }
       .provider-card {
         display: none;
@@ -639,26 +820,232 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
       .provider-card.active {
         display: block;
       }
-      .actions {
-        margin-top: 16px;
-        display: flex;
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      input, select, textarea {
+        width: 100%;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #ffffff;
+        color: var(--ink);
+        font-size: 14px;
+      }
+      input:focus, select:focus, textarea:focus {
+        outline: 2px solid #5eead4;
+        outline-offset: 1px;
+      }
+      textarea {
+        min-height: 78px;
+        resize: vertical;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.2;
+      }
+      details.advanced {
+        border: 1px dashed #cbd5e1;
+        border-radius: 10px;
+        padding: 8px 10px;
+        background: #ffffff;
+        margin-top: 10px;
+      }
+      details.advanced > summary {
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        color: #334155;
+        margin: 0;
+      }
+      details.advanced[open] > summary {
+        margin-bottom: 8px;
+      }
+      details.advanced .advanced-grid {
+        display: grid;
+        gap: 10px;
+      }
+      .field-no-hint {
+        padding-bottom: 16px;
+      }
+      .test-section {
+        margin-top: 12px;
+      }
+      .test-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: end;
+      }
+      .test-buttons {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, max-content));
+        gap: 8px;
+      }
+      .test-buttons .action-btn[hidden] {
+        display: none;
+      }
+      .toggle {
+        display: grid;
+        grid-template-columns: 42px 1fr;
         gap: 10px;
         align-items: center;
       }
-      button.save {
-        border: none;
+      .toggle input {
+        position: absolute;
+        opacity: 0;
+        width: 1px;
+        height: 1px;
+      }
+      .toggle-slider {
+        width: 42px;
+        height: 24px;
+        border-radius: 999px;
+        background: #cbd5e1;
+        position: relative;
+        transition: background 0.2s ease;
+      }
+      .toggle-slider::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        background: #ffffff;
+        transition: left 0.2s ease;
+      }
+      .toggle input:checked + .toggle-slider {
+        background: #14b8a6;
+      }
+      .toggle input:checked + .toggle-slider::after {
+        left: 20px;
+      }
+      .toggle-title {
+        color: #334155;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .secret-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+      }
+      .secret-toggle {
+        border: 1px solid #cbd5e1;
+        background: #ffffff;
+        color: #334155;
         border-radius: 10px;
-        background: var(--accent);
-        color: #fff;
-        padding: 10px 16px;
-        font-size: 14px;
+        padding: 0 10px;
         cursor: pointer;
       }
-      #result { font-size: 13px; color: var(--muted); }
+      .key-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .badge {
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+        border: 1px solid #cbd5e1;
+      }
+      .badge.ok {
+        color: #166534;
+        border-color: #86efac;
+        background: #f0fdf4;
+      }
+      .badge.bad {
+        color: #991b1b;
+        border-color: #fecaca;
+        background: #fef2f2;
+      }
+      .clear-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .clear-toggle input {
+        width: 14px;
+        height: 14px;
+        padding: 0;
+      }
+      .actions {
+        margin-top: 14px;
+        border-top: 1px solid #dbe3ea;
+        background: #ffffff;
+        padding-top: 12px;
+      }
+      .action-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .action-row .action-btn {
+        flex: 0 0 auto;
+      }
+      .action-row #result {
+        flex: 1;
+        min-width: 0;
+      }
+      .action-btn {
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .action-btn.primary {
+        background: var(--accent);
+        color: #ffffff;
+      }
+      .action-btn.secondary {
+        background: #0f172a;
+        color: #ffffff;
+      }
+      .action-btn.ghost {
+        background: #e2e8f0;
+        color: #0f172a;
+      }
+      .action-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.7;
+      }
+      #result {
+        margin-top: 0;
+        min-height: 18px;
+        font-size: 13px;
+      }
       #result.ok { color: var(--ok); }
+      #result.warn { color: var(--warn); }
       #result.err { color: var(--danger); }
-      @media (max-width: 960px) {
-        .grid.two, .grid.three { grid-template-columns: 1fr; }
+      @media (max-width: 980px) {
+        .grid.two, .grid.three {
+          grid-template-columns: 1fr;
+        }
+        .steps {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (max-width: 760px) {
+        .test-row {
+          grid-template-columns: 1fr;
+        }
+        .test-buttons {
+          grid-template-columns: 1fr;
+        }
+        .action-row {
+          flex-direction: column;
+          align-items: stretch;
+        }
       }
     </style>
   </head>
@@ -670,26 +1057,44 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
       </div>
 
       <div class="card">
-        <div class="meta">
-          <div>Config path: <code>${escapeHtml(configPath)}</code></div>
-          <div>Missing config: <code id="missing">${escapeHtml(missingText)}</code></div>
+        <div class="meta-row">
+          <div class="meta-item">Config path: <code>${escapeHtml(configPath)}</code></div>
+          <div class="meta-item">
+            Missing config:
+            <div id="missing-list" class="missing-list"></div>
+          </div>
+          <ol class="steps">
+            <li class="step" data-step="keys">
+              <span class="step-title">1. Keys</span>
+              <span class="step-note">Set provider + Telegram secrets</span>
+            </li>
+            <li class="step" data-step="telegram">
+              <span class="step-title">2. Telegram</span>
+              <span class="step-note">Set destination chat id</span>
+            </li>
+            <li class="step" data-step="tts">
+              <span class="step-title">3. TTS</span>
+              <span class="step-note">Pick provider and tune voice</span>
+            </li>
+          </ol>
+          <div id="next-hint"></div>
         </div>
 
         <form id="setup-form">
           <input type="hidden" id="token" name="token" value="${escapeHtml(token)}" />
 
           <div class="tabs">
-            <button class="tab active" type="button" data-tab="tts">TTS</button>
+            <button class="tab" type="button" data-tab="tts">TTS</button>
             <button class="tab" type="button" data-tab="telegram">Telegram</button>
-            <button class="tab" type="button" data-tab="keys">Keys</button>
             <button class="tab" type="button" data-tab="misc">Misc</button>
+            <button class="tab" type="button" data-tab="keys">Keys</button>
           </div>
 
-          <div class="panel active" data-panel="tts">
+          <div class="panel" data-panel="tts">
             <div class="grid">
               <div class="section stack">
                 <h3>Provider</h3>
-                <p>Pick one provider. The matching params block appears below.</p>
+                <p>Pick one provider. Basic settings stay visible; advanced settings are collapsed.</p>
                 <label>
                   Provider
                   <select name="provider" id="provider">
@@ -705,153 +1110,142 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
                 <div class="grid two">
                   <label>
                     Model
-                    <select name="openaiModel">
-                      ${openaiModelOptions}
-                    </select>
+                    <select name="openaiModel">${openaiModelOptions}</select>
                   </label>
                   <label>
                     Voice
-                    <select name="openaiVoice">
-                      ${openaiVoiceOptions}
-                    </select>
+                    <select name="openaiVoice">${openaiVoiceOptions}</select>
                   </label>
                 </div>
                 <div class="grid two">
                   <label>
-                    Speed (0.25 - 4.0)
-                    <input name="openaiSpeed" value="${openaiSpeed}" type="number" min="0.25" max="4" step="0.05" />
+                    Speed (0.25 to 4.0)
+                    <input name="openaiSpeed" value="${escapeHtml(openaiSpeed)}" type="number" min="0.25" max="4" step="0.05" inputmode="decimal" />
                   </label>
-                  <label>
+                  <label class="field-no-hint">
                     Response format
-                    <select name="openaiResponseFormat">
-                      ${openaiFormatOptions}
-                    </select>
+                    <select name="openaiResponseFormat">${openaiFormatOptions}</select>
                   </label>
                 </div>
-                <label>
-                  Instructions (optional)
-                  <textarea name="openaiInstructions" placeholder="Speak in a calm, concise style">${openaiInstructions}</textarea>
-                </label>
+                <details class="advanced">
+                  <summary>Advanced</summary>
+                  <div class="advanced-grid">
+                    <label>
+                      Instructions (optional)
+                      <textarea name="openaiInstructions" placeholder="Speak in a calm, concise style">${escapeHtml(openaiInstructions)}</textarea>
+                    </label>
+                  </div>
+                </details>
               </div>
 
               <div class="provider-card section stack" data-provider="fal-minimax">
                 <h3>FAL MiniMax Speech 2.8 Turbo params</h3>
-                <div class="grid two">
+                <div class="grid three">
                   <label>
                     Voice ID
-                    <select name="falMinimaxVoiceId">
-                      ${minimaxVoiceOptions}
-                    </select>
+                    <select name="falMinimaxVoiceId">${minimaxVoiceOptions}</select>
                   </label>
                   <label>
                     Emotion
-                    <select name="falMinimaxEmotion">
-                      ${minimaxEmotionOptions}
-                    </select>
+                    <select name="falMinimaxEmotion">${minimaxEmotionOptions}</select>
+                  </label>
+                  <label>
+                    Speed (0.5 to 2.0)
+                    <input name="falMinimaxSpeed" value="${escapeHtml(falMinimaxSpeed)}" type="number" min="0.5" max="2" step="0.05" inputmode="decimal" />
                   </label>
                 </div>
-                <div class="grid three">
-                  <label>
-                    Speed
-                    <input name="falMinimaxSpeed" value="${falMinimaxSpeed}" type="number" step="0.05" />
-                  </label>
-                  <label>
-                    Volume
-                    <input name="falMinimaxVol" value="${falMinimaxVol}" type="number" step="0.05" />
-                  </label>
-                  <label>
-                    Pitch
-                    <input name="falMinimaxPitch" value="${falMinimaxPitch}" type="number" step="0.05" />
-                  </label>
-                </div>
-                <div class="grid two">
-                  <label>
-                    Language boost
-                    <select name="falMinimaxLanguageBoost">
-                      ${minimaxLanguageBoostOptions}
-                    </select>
-                  </label>
-                  <label>
-                    English normalization
-                    <select name="falMinimaxEnglishNormalization">
-                      ${minimaxEnglishNormalizationOptions}
-                    </select>
-                  </label>
-                </div>
-                <div class="grid two">
-                  <label>
-                    Output format
-                    <select name="falMinimaxOutputFormat">
-                      ${minimaxOutputFormatOptions}
-                    </select>
-                  </label>
-                  <label>
-                    Audio format
-                    <select name="falMinimaxAudioFormat">
-                      ${minimaxAudioFormatOptions}
-                    </select>
-                  </label>
-                </div>
-                <div class="grid two">
-                  <label>
-                    Sample rate
-                    <select name="falMinimaxAudioSampleRate">
-                      ${minimaxAudioSampleRateOptions}
-                    </select>
-                  </label>
-                  <label>
-                    Channel
-                    <select name="falMinimaxAudioChannel">
-                      ${minimaxAudioChannelOptions}
-                    </select>
-                  </label>
-                </div>
-                <div class="grid two">
-                  <label>
-                    Bitrate
-                    <select name="falMinimaxAudioBitrate">
-                      ${minimaxAudioBitrateOptions}
-                    </select>
-                  </label>
-                  <label>
-                    Normalization enabled
-                    <select name="falMinimaxNormalizationEnabled">
-                      ${minimaxNormalizationEnabledOptions}
-                    </select>
-                  </label>
-                </div>
-                <div class="grid three">
-                  <label>
-                    Target loudness
-                    <input name="falMinimaxNormalizationTargetLoudness" value="${falMinimaxNormalizationTargetLoudness}" type="number" step="0.1" min="-70" max="-10" />
-                  </label>
-                  <label>
-                    Target range
-                    <input name="falMinimaxNormalizationTargetRange" value="${falMinimaxNormalizationTargetRange}" type="number" step="0.1" min="0" max="20" />
-                  </label>
-                  <label>
-                    Target peak
-                    <input name="falMinimaxNormalizationTargetPeak" value="${falMinimaxNormalizationTargetPeak}" type="number" step="0.1" min="-3" max="0" />
-                  </label>
-                </div>
-                <div class="grid three">
-                  <label>
-                    Voice modify pitch
-                    <input name="falMinimaxVoiceModifyPitch" value="${falMinimaxVoiceModifyPitch}" type="number" step="1" min="-100" max="100" />
-                  </label>
-                  <label>
-                    Voice modify intensity
-                    <input name="falMinimaxVoiceModifyIntensity" value="${falMinimaxVoiceModifyIntensity}" type="number" step="1" min="-100" max="100" />
-                  </label>
-                  <label>
-                    Voice modify timbre
-                    <input name="falMinimaxVoiceModifyTimbre" value="${falMinimaxVoiceModifyTimbre}" type="number" step="1" min="-100" max="100" />
-                  </label>
-                </div>
-                <label>
-                  Pronunciation tone list (comma/newline separated)
-                  <textarea name="falMinimaxPronunciationToneList" placeholder="燕少飞/(yan4)(shao3)(fei1)">${falMinimaxPronunciationToneList}</textarea>
-                </label>
+                <details class="advanced">
+                  <summary>Advanced</summary>
+                  <div class="advanced-grid">
+                    <div class="grid two">
+                      <label>
+                        Volume
+                        <input name="falMinimaxVol" value="${escapeHtml(falMinimaxVol)}" type="number" min="0.01" max="10" step="0.01" inputmode="decimal" />
+                        <span class="hint">Range: 0.01 to 10</span>
+                      </label>
+                      <label>
+                        Pitch
+                        <input name="falMinimaxPitch" value="${escapeHtml(falMinimaxPitch)}" type="number" min="-12" max="12" step="1" inputmode="numeric" />
+                        <span class="hint">Range: -12 to 12</span>
+                      </label>
+                    </div>
+                    <div class="grid two">
+                      <label>
+                        Language boost
+                        <select name="falMinimaxLanguageBoost">${minimaxLanguageBoostOptions}</select>
+                      </label>
+                      <label class="toggle">
+                        <input name="falMinimaxEnglishNormalization" type="checkbox"${boolChecked(runtime.tts.params.falMinimax.englishNormalization ?? false)} />
+                        <span class="toggle-slider" aria-hidden="true"></span>
+                        <span class="toggle-title">English normalization</span>
+                      </label>
+                    </div>
+                    <div class="grid three">
+                      <label>
+                        Output format
+                        <select name="falMinimaxOutputFormat">${minimaxOutputFormatOptions}</select>
+                      </label>
+                      <label>
+                        Audio format
+                        <select name="falMinimaxAudioFormat">${minimaxAudioFormatOptions}</select>
+                      </label>
+                      <label>
+                        Sample rate
+                        <select name="falMinimaxAudioSampleRate">${minimaxAudioSampleRateOptions}</select>
+                      </label>
+                    </div>
+                    <div class="grid three">
+                      <label>
+                        Channel
+                        <select name="falMinimaxAudioChannel">${minimaxAudioChannelOptions}</select>
+                      </label>
+                      <label>
+                        Bitrate
+                        <select name="falMinimaxAudioBitrate">${minimaxAudioBitrateOptions}</select>
+                      </label>
+                      <label class="toggle">
+                        <input name="falMinimaxNormalizationEnabled" type="checkbox"${boolChecked(runtime.tts.params.falMinimax.normalizationEnabled ?? true)} />
+                        <span class="toggle-slider" aria-hidden="true"></span>
+                        <span class="toggle-title">Normalization enabled</span>
+                      </label>
+                    </div>
+                    <div class="grid three">
+                      <label>
+                        Target loudness
+                        <input name="falMinimaxNormalizationTargetLoudness" value="${escapeHtml(falMinimaxNormalizationTargetLoudness)}" type="number" min="-70" max="-10" step="0.1" inputmode="decimal" />
+                        <span class="hint">Range: -70 to -10</span>
+                      </label>
+                      <label>
+                        Target range
+                        <input name="falMinimaxNormalizationTargetRange" value="${escapeHtml(falMinimaxNormalizationTargetRange)}" type="number" min="0" max="20" step="0.1" inputmode="decimal" />
+                        <span class="hint">Range: 0 to 20</span>
+                      </label>
+                      <label>
+                        Target peak
+                        <input name="falMinimaxNormalizationTargetPeak" value="${escapeHtml(falMinimaxNormalizationTargetPeak)}" type="number" min="-3" max="0" step="0.1" inputmode="decimal" />
+                        <span class="hint">Range: -3 to 0</span>
+                      </label>
+                    </div>
+                    <div class="grid three">
+                      <label>
+                        Voice modify pitch
+                        <input name="falMinimaxVoiceModifyPitch" value="${escapeHtml(falMinimaxVoiceModifyPitch)}" type="number" min="-100" max="100" step="1" inputmode="numeric" />
+                      </label>
+                      <label>
+                        Voice modify intensity
+                        <input name="falMinimaxVoiceModifyIntensity" value="${escapeHtml(falMinimaxVoiceModifyIntensity)}" type="number" min="-100" max="100" step="1" inputmode="numeric" />
+                      </label>
+                      <label>
+                        Voice modify timbre
+                        <input name="falMinimaxVoiceModifyTimbre" value="${escapeHtml(falMinimaxVoiceModifyTimbre)}" type="number" min="-100" max="100" step="1" inputmode="numeric" />
+                      </label>
+                    </div>
+                    <label>
+                      Pronunciation tone list (comma or newline separated)
+                      <textarea name="falMinimaxPronunciationToneList" placeholder="燕少飞/(yan4)(shao3)(fei1)">${escapeHtml(falMinimaxPronunciationToneList)}</textarea>
+                    </label>
+                  </div>
+                </details>
               </div>
 
               <div class="provider-card section stack" data-provider="fal-elevenlabs">
@@ -859,49 +1253,50 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
                 <div class="grid two">
                   <label>
                     Voice
-                    <select name="falElevenVoice">
-                      ${falElevenVoiceOptions}
-                    </select>
+                    <select name="falElevenVoice">${falElevenVoiceOptions}</select>
                   </label>
                   <label>
-                    Language code (optional)
-                    <input name="falElevenLanguageCode" value="${falElevenLanguageCode}" placeholder="en" />
+                    Speed (0.7 to 1.2)
+                    <input name="falElevenSpeed" value="${escapeHtml(falElevenSpeed)}" type="number" min="0.7" max="1.2" step="0.05" inputmode="decimal" />
                   </label>
                 </div>
                 <div class="grid two">
                   <label>
-                    Speed (0.7 - 1.2)
-                    <input name="falElevenSpeed" value="${falElevenSpeed}" type="number" min="0.7" max="1.2" step="0.05" />
+                    Language code (optional)
+                    <input name="falElevenLanguageCode" value="${escapeHtml(falElevenLanguageCode)}" placeholder="en" />
                   </label>
                   <label>
                     Text normalization
-                    <select name="falElevenApplyTextNormalization">
-                      ${falElevenNormalizationOptions}
-                    </select>
+                    <select name="falElevenApplyTextNormalization">${falElevenNormalizationOptions}</select>
                   </label>
                 </div>
-                <div class="grid two">
-                  <label>
-                    Return timestamps
-                    <select name="falElevenTimestamps">
-                      ${falElevenTimestampsOptions}
-                    </select>
-                  </label>
-                </div>
-                <div class="grid three">
-                  <label>
-                    Stability (0 - 1)
-                    <input name="falElevenStability" value="${falElevenStability}" type="number" min="0" max="1" step="0.05" />
-                  </label>
-                  <label>
-                    Similarity boost (0 - 1)
-                    <input name="falElevenSimilarityBoost" value="${falElevenSimilarityBoost}" type="number" min="0" max="1" step="0.05" />
-                  </label>
-                  <label>
-                    Style (0 - 1)
-                    <input name="falElevenStyle" value="${falElevenStyle}" type="number" min="0" max="1" step="0.05" />
-                  </label>
-                </div>
+                <details class="advanced">
+                  <summary>Advanced</summary>
+                  <div class="advanced-grid">
+                    <label class="toggle">
+                      <input name="falElevenTimestamps" type="checkbox"${boolChecked(runtime.tts.params.falElevenlabs.timestamps ?? false)} />
+                      <span class="toggle-slider" aria-hidden="true"></span>
+                      <span class="toggle-title">Return timestamps</span>
+                    </label>
+                    <div class="grid three">
+                      <label>
+                        Stability
+                        <input name="falElevenStability" value="${escapeHtml(falElevenStability)}" type="number" min="0" max="1" step="0.05" inputmode="decimal" />
+                        <span class="hint">Range: 0 to 1</span>
+                      </label>
+                      <label>
+                        Similarity boost
+                        <input name="falElevenSimilarityBoost" value="${escapeHtml(falElevenSimilarityBoost)}" type="number" min="0" max="1" step="0.05" inputmode="decimal" />
+                        <span class="hint">Range: 0 to 1</span>
+                      </label>
+                      <label>
+                        Style
+                        <input name="falElevenStyle" value="${escapeHtml(falElevenStyle)}" type="number" min="0" max="1" step="0.05" inputmode="decimal" />
+                        <span class="hint">Range: 0 to 1</span>
+                      </label>
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
           </div>
@@ -909,38 +1304,11 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
           <div class="panel" data-panel="telegram">
             <div class="grid">
               <div class="section stack">
-                <h3>Destination</h3>
+                <h3>Telegram destination</h3>
+                <p>Use a numeric chat id or channel id where notifications should be sent.</p>
                 <label>
                   Chat ID
-                  <input name="telegramChatId" value="${chatId}" placeholder="123456789" />
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div class="panel" data-panel="keys">
-            <div class="grid three">
-              <div class="section stack">
-                <h3>OpenAI</h3>
-                <label>
-                  API key
-                  <input name="openaiApiKey" type="password" placeholder="sk-..." autocomplete="off" />
-                </label>
-              </div>
-
-              <div class="section stack">
-                <h3>FAL</h3>
-                <label>
-                  API key
-                  <input name="falApiKey" type="password" placeholder="fal_..." autocomplete="off" />
-                </label>
-              </div>
-
-              <div class="section stack">
-                <h3>Telegram</h3>
-                <label>
-                  Bot token
-                  <input name="telegramBotToken" type="password" placeholder="123:ABC" autocomplete="off" />
+                  <input name="telegramChatId" value="${escapeHtml(chatId)}" placeholder="123456789" />
                 </label>
               </div>
             </div>
@@ -950,38 +1318,315 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
             <div class="grid">
               <div class="section stack">
                 <h3>Runtime behavior</h3>
-                <label>
-                  <code>tts_say</code> async by default
-                  <select name="ttsAsyncByDefault">
-                    ${ttsAsyncByDefaultOptions}
-                  </select>
+                <label class="toggle">
+                  <input name="ttsAsyncByDefault" type="checkbox"${boolChecked(runtime.misc.ttsAsyncByDefault)} />
+                  <span class="toggle-slider" aria-hidden="true"></span>
+                  <span class="toggle-title"><code>tts_say</code> async by default</span>
                 </label>
-                <p>If true, <code>tts_say</code> returns immediately and runs speech generation in background.</p>
+                <p>If enabled, <code>tts_say</code> returns immediately and generation runs in the background.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel" data-panel="keys">
+            <div class="grid three">
+              <div class="section stack">
+                <div class="key-head">
+                  <h3>OpenAI</h3>
+                  <span class="badge ${escapeHtml(keyStatus.openai.className)}" data-key-badge="openai">${escapeHtml(keyStatus.openai.label)}</span>
+                </div>
+                <label>
+                  API key
+                  <div class="secret-row">
+                    <input name="openaiApiKey" type="password" placeholder="sk-..." autocomplete="off" data-secret-input />
+                    <button type="button" class="secret-toggle" data-secret-toggle>Show</button>
+                  </div>
+                </label>
+                <label class="clear-toggle">
+                  <input type="checkbox" name="clearOpenaiApiKey" data-clear-target="openaiApiKey" />
+                  Clear stored key
+                </label>
+              </div>
+
+              <div class="section stack">
+                <div class="key-head">
+                  <h3>FAL</h3>
+                  <span class="badge ${escapeHtml(keyStatus.fal.className)}" data-key-badge="fal">${escapeHtml(keyStatus.fal.label)}</span>
+                </div>
+                <label>
+                  API key
+                  <div class="secret-row">
+                    <input name="falApiKey" type="password" placeholder="fal_..." autocomplete="off" data-secret-input />
+                    <button type="button" class="secret-toggle" data-secret-toggle>Show</button>
+                  </div>
+                </label>
+                <label class="clear-toggle">
+                  <input type="checkbox" name="clearFalApiKey" data-clear-target="falApiKey" />
+                  Clear stored key
+                </label>
+              </div>
+
+              <div class="section stack">
+                <div class="key-head">
+                  <h3>Telegram</h3>
+                  <span class="badge ${escapeHtml(keyStatus.telegram.className)}" data-key-badge="telegram">${escapeHtml(keyStatus.telegram.label)}</span>
+                </div>
+                <label>
+                  Bot token
+                  <div class="secret-row">
+                    <input name="telegramBotToken" type="password" placeholder="123:ABC" autocomplete="off" data-secret-input />
+                    <button type="button" class="secret-toggle" data-secret-toggle>Show</button>
+                  </div>
+                </label>
+                <label class="clear-toggle">
+                  <input type="checkbox" name="clearTelegramBotToken" data-clear-target="telegramBotToken" />
+                  Clear stored token
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="test-section section stack" id="test-section">
+            <h3>Tests</h3>
+            <p>Use after saving config. Test actions save the form first, then run the selected test.</p>
+            <div class="test-row">
+              <label>
+                Test message (optional)
+                <input id="test-text" name="testText" value="${escapeHtml(testTextDefault)}" />
+              </label>
+              <div class="test-buttons">
+                <button class="action-btn secondary" id="test-action-btn" type="submit" data-intent="save-test-tts">Save + Test TTS</button>
               </div>
             </div>
           </div>
 
           <div class="actions">
-            <button class="save" type="submit">Save configuration</button>
-            <span id="result">Empty secret fields keep existing values.</span>
+            <div class="action-row">
+              <div id="result">Empty secret fields keep existing values unless "clear" is checked.</div>
+              <button class="action-btn primary" type="submit" data-intent="save">Save</button>
+            </div>
           </div>
         </form>
       </div>
     </div>
 
+    <script id="initial-state" type="application/json">${initialState}</script>
     <script>
+      const TAB_ORDER = ["tts", "telegram", "misc", "keys"];
+      const CHECKBOX_NAMES = [
+        "falMinimaxEnglishNormalization",
+        "falMinimaxNormalizationEnabled",
+        "falElevenTimestamps",
+        "ttsAsyncByDefault",
+        "clearOpenaiApiKey",
+        "clearFalApiKey",
+        "clearTelegramBotToken"
+      ];
+      const MISSING_LABELS = {
+        "keys.openai.apiKey": "OpenAI API key",
+        "keys.fal.apiKey": "FAL API key",
+        "keys.telegram.botToken": "Telegram bot token",
+        "telegram.chatId": "Telegram chat id"
+      };
+
+      function missingFieldToTab(field) {
+        if (field === "telegram.chatId") {
+          return "telegram";
+        }
+        if (field.startsWith("keys.")) {
+          return "keys";
+        }
+        return "tts";
+      }
+
+      function missingFieldToInputName(field) {
+        if (field === "keys.openai.apiKey") return "openaiApiKey";
+        if (field === "keys.fal.apiKey") return "falApiKey";
+        if (field === "keys.telegram.botToken") return "telegramBotToken";
+        if (field === "telegram.chatId") return "telegramChatId";
+        return null;
+      }
+
+      function safeJsonParse(text, fallback) {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return fallback;
+        }
+      }
+
+      const form = document.getElementById("setup-form");
+      const resultNode = document.getElementById("result");
+      const missingListNode = document.getElementById("missing-list");
+      const nextHintNode = document.getElementById("next-hint");
+      const providerSelect = document.getElementById("provider");
       const tabs = Array.from(document.querySelectorAll(".tab"));
       const panels = Array.from(document.querySelectorAll(".panel"));
-      const form = document.getElementById("setup-form");
-      const result = document.getElementById("result");
-      const missingNode = document.getElementById("missing");
-      const tokenInput = document.getElementById("token");
-      const providerSelect = document.getElementById("provider");
       const providerCards = Array.from(document.querySelectorAll(".provider-card"));
+      const actionButtons = Array.from(document.querySelectorAll(".action-btn"));
+      const initialStateNode = document.getElementById("initial-state");
+      const tokenInput = document.getElementById("token");
+      const testTextInput = document.getElementById("test-text");
+      const testSection = document.getElementById("test-section");
+      const testActionButton = document.getElementById("test-action-btn");
+
+      const parsedState = safeJsonParse(initialStateNode ? initialStateNode.textContent || "{}" : "{}", {});
+      let missingConfig = Array.isArray(parsedState.missingConfig) ? parsedState.missingConfig.slice() : [];
+      let keyStatus = parsedState.keyStatus && typeof parsedState.keyStatus === "object"
+        ? parsedState.keyStatus
+        : { openai: { label: "Missing", className: "bad" }, fal: { label: "Missing", className: "bad" }, telegram: { label: "Missing", className: "bad" } };
 
       const queryToken = new URLSearchParams(window.location.search).get("token");
       if (queryToken) {
         tokenInput.value = queryToken;
+      }
+
+      function setResult(text, level) {
+        resultNode.textContent = text;
+        resultNode.className = level || "";
+      }
+
+      function setBusy(busy) {
+        for (const button of actionButtons) {
+          button.disabled = busy;
+        }
+      }
+
+      function setSubmitterSavingState(submitter, busy) {
+        if (!submitter || submitter.tagName !== "BUTTON") {
+          return;
+        }
+        if (busy) {
+          submitter.setAttribute("data-original-label", submitter.textContent || "");
+          submitter.textContent = "Saving...";
+          return;
+        }
+        const original = submitter.getAttribute("data-original-label");
+        if (original !== null) {
+          submitter.textContent = original;
+          submitter.removeAttribute("data-original-label");
+        }
+      }
+
+      function updateKeyBadges() {
+        for (const badge of document.querySelectorAll("[data-key-badge]")) {
+          const key = badge.getAttribute("data-key-badge");
+          const state = keyStatus[key];
+          if (!state) {
+            continue;
+          }
+          badge.textContent = state.label;
+          badge.classList.remove("ok", "bad");
+          badge.classList.add(state.className);
+        }
+      }
+
+      function renderMissingChips() {
+        missingListNode.innerHTML = "";
+        if (!missingConfig.length) {
+          const span = document.createElement("span");
+          span.className = "missing-empty";
+          span.textContent = "none";
+          missingListNode.appendChild(span);
+          return;
+        }
+
+        for (const field of missingConfig) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "missing-chip";
+          button.textContent = MISSING_LABELS[field] || field;
+          button.addEventListener("click", () => {
+            const tab = missingFieldToTab(field);
+            activateTab(tab, true);
+            const inputName = missingFieldToInputName(field);
+            if (!inputName) {
+              return;
+            }
+            const input = form.querySelector('[name="' + inputName + '"]');
+            if (input && typeof input.focus === "function") {
+              input.focus();
+              if (typeof input.scrollIntoView === "function") {
+                input.scrollIntoView({ block: "center", behavior: "smooth" });
+              }
+            }
+          });
+          missingListNode.appendChild(button);
+        }
+      }
+
+      function providerKeyReady(provider) {
+        if (provider === "openai") {
+          return keyStatus.openai && keyStatus.openai.className === "ok";
+        }
+        return keyStatus.fal && keyStatus.fal.className === "ok";
+      }
+
+      function updateSteps() {
+        const provider = providerSelect.value;
+        const keysDone = !missingConfig.some(item => item.startsWith("keys."));
+        const telegramDone = !missingConfig.includes("telegram.chatId");
+        const ttsDone = providerKeyReady(provider);
+
+        const steps = {
+          keys: { done: keysDone, active: !keysDone },
+          telegram: { done: telegramDone, active: keysDone && !telegramDone },
+          tts: { done: ttsDone, active: keysDone && telegramDone && !ttsDone }
+        };
+
+        for (const node of document.querySelectorAll(".step")) {
+          const stepName = node.getAttribute("data-step");
+          const state = steps[stepName];
+          if (!state) {
+            continue;
+          }
+          node.classList.toggle("done", state.done);
+          node.classList.toggle("active", state.active);
+        }
+
+        if (!keysDone) {
+          nextHintNode.textContent = "Next: open Keys tab and fill required provider + Telegram secrets.";
+          return;
+        }
+        if (!telegramDone) {
+          nextHintNode.textContent = "Next: open Telegram tab and set chat id.";
+          return;
+        }
+        if (!ttsDone) {
+          nextHintNode.textContent = "Next: current provider key is missing. Fill Keys tab before testing TTS.";
+          return;
+        }
+        nextHintNode.textContent = "Config is ready. Save, then run Save + Test buttons.";
+      }
+
+      function activateTab(tabName, updateHash) {
+        const target = TAB_ORDER.includes(tabName) ? tabName : "tts";
+        for (const tab of tabs) {
+          tab.classList.toggle("active", tab.getAttribute("data-tab") === target);
+        }
+        for (const panel of panels) {
+          panel.classList.toggle("active", panel.getAttribute("data-panel") === target);
+        }
+        if (testSection) {
+          const showTests = target === "tts" || target === "telegram";
+          testSection.hidden = !showTests;
+        }
+        if (testActionButton) {
+          if (target === "telegram") {
+            testActionButton.textContent = "Save + Test Telegram";
+            testActionButton.classList.remove("secondary");
+            testActionButton.classList.add("ghost");
+            testActionButton.setAttribute("data-intent", "save-test-telegram");
+          } else {
+            testActionButton.textContent = "Save + Test TTS";
+            testActionButton.classList.remove("ghost");
+            testActionButton.classList.add("secondary");
+            testActionButton.setAttribute("data-intent", "save-test-tts");
+          }
+        }
+        if (updateHash) {
+          history.replaceState(null, "", "#" + target);
+        }
       }
 
       function syncProviderCards() {
@@ -989,52 +1634,143 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
         for (const card of providerCards) {
           card.classList.toggle("active", card.getAttribute("data-provider") === selected);
         }
+        updateSteps();
       }
-
-      syncProviderCards();
-      providerSelect.addEventListener("change", syncProviderCards);
 
       for (const tab of tabs) {
         tab.addEventListener("click", () => {
-          const name = tab.getAttribute("data-tab");
-          for (const t of tabs) {
-            t.classList.toggle("active", t === tab);
-          }
-          for (const panel of panels) {
-            panel.classList.toggle("active", panel.getAttribute("data-panel") === name);
-          }
+          activateTab(tab.getAttribute("data-tab") || "tts", true);
         });
       }
 
-      form.addEventListener("submit", async (event) => {
+      providerSelect.addEventListener("change", syncProviderCards);
+
+      for (const toggle of document.querySelectorAll("[data-secret-toggle]")) {
+        toggle.addEventListener("click", () => {
+          const row = toggle.closest(".secret-row");
+          const input = row ? row.querySelector("[data-secret-input]") : null;
+          if (!input) {
+            return;
+          }
+          const nextType = input.type === "password" ? "text" : "password";
+          input.type = nextType;
+          toggle.textContent = nextType === "password" ? "Show" : "Hide";
+        });
+      }
+
+      for (const clearToggle of document.querySelectorAll("[data-clear-target]")) {
+        clearToggle.addEventListener("change", () => {
+          const target = clearToggle.getAttribute("data-clear-target");
+          const input = target ? form.querySelector('[name="' + target + '"]') : null;
+          if (!input) {
+            return;
+          }
+          if (clearToggle.checked) {
+            input.value = "";
+          }
+          input.disabled = clearToggle.checked;
+        });
+      }
+
+      // Enter key should not submit the whole form from text fields.
+      form.addEventListener("keydown", event => {
+        if (event.key !== "Enter") {
+          return;
+        }
+        const target = event.target;
+        if (!target || target.tagName === "TEXTAREA" || target.tagName === "BUTTON") {
+          return;
+        }
         event.preventDefault();
+      });
+
+      function formPayload(submitter) {
         const formData = new FormData(form);
-        const body = Object.fromEntries(formData.entries());
+        const payload = Object.fromEntries(formData.entries());
+        for (const name of CHECKBOX_NAMES) {
+          const input = form.querySelector('[name="' + name + '"]');
+          if (input && input.type === "checkbox") {
+            payload[name] = input.checked ? "true" : "false";
+          }
+        }
+        const intent = submitter && submitter.getAttribute("data-intent") || "save";
+        if (intent === "save-test-tts") {
+          payload.runTests = "tts";
+        } else if (intent === "save-test-telegram") {
+          payload.runTests = "telegram";
+        }
+        payload.testText = testTextInput.value || "";
+        return payload;
+      }
+
+      function firstTabFromMissing() {
+        if (!missingConfig.length) {
+          return "tts";
+        }
+        return missingFieldToTab(missingConfig[0]);
+      }
+
+      form.addEventListener("submit", async event => {
+        event.preventDefault();
+        const submitter = event.submitter || null;
+        const payload = formPayload(submitter);
+        setBusy(true);
+        setSubmitterSavingState(submitter, true);
 
         try {
           const response = await fetch("/api/config", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "X-Setup-Token": String(body.token || "")
+              "X-Setup-Token": String(payload.token || "")
             },
-            body: JSON.stringify(body)
+            body: JSON.stringify(payload)
           });
-
-          const payload = await response.json();
-          if (!response.ok || !payload.ok) {
-            throw new Error(payload.error || "Save failed");
+          const responseText = await response.text();
+          const body = safeJsonParse(responseText, { ok: false, error: responseText });
+          if (!response.ok || !body.ok) {
+            throw new Error(body.error || "Save failed");
           }
 
-          const missing = payload.missingConfig || [];
-          missingNode.textContent = missing.length ? missing.join(", ") : "none";
-          result.textContent = "Saved";
-          result.className = "ok";
+          missingConfig = Array.isArray(body.missingConfig) ? body.missingConfig.slice() : [];
+          if (body.keyStatus && typeof body.keyStatus === "object") {
+            keyStatus = body.keyStatus;
+          }
+          renderMissingChips();
+          updateKeyBadges();
+          updateSteps();
+
+          const tests = body.tests || {};
+          const messages = ["Saved"];
+          let level = "ok";
+          if (tests.tts) {
+            messages.push("TTS: " + tests.tts.message);
+            if (!tests.tts.ok) {
+              level = "warn";
+            }
+          }
+          if (tests.telegram) {
+            messages.push("Telegram: " + tests.telegram.message);
+            if (!tests.telegram.ok) {
+              level = "warn";
+            }
+          }
+          setResult(messages.join(" | "), level);
         } catch (error) {
-          result.textContent = String(error);
-          result.className = "err";
+          setResult(String(error), "err");
+        } finally {
+          setSubmitterSavingState(submitter, false);
+          setBusy(false);
         }
       });
+
+      renderMissingChips();
+      updateKeyBadges();
+      syncProviderCards();
+
+      const hashTab = (window.location.hash || "").replace("#", "").toLowerCase();
+      const initialTab = TAB_ORDER.includes(hashTab) ? hashTab : firstTabFromMissing();
+      activateTab(initialTab, false);
     </script>
   </body>
 </html>`;
@@ -1062,6 +1798,9 @@ export async function startSetupWebServer(
       }
 
       const url = new URL(req.url, baseUrl);
+      if (handlers.reloadRuntime) {
+        await handlers.reloadRuntime();
+      }
       const runtime = handlers.getRuntime();
 
       if (req.method === "GET" && url.pathname === "/") {
@@ -1077,7 +1816,8 @@ export async function startSetupWebServer(
           ok: true,
           setupUrl,
           configPath: options.configPath,
-          missingConfig: getMissingConfigFields(runtime)
+          missingConfig: getMissingConfigFields(runtime),
+          keyStatus: buildKeyStatusPayload(runtime)
         }));
         return;
       }
@@ -1097,10 +1837,18 @@ export async function startSetupWebServer(
         await saveRuntimeConfig(options.configPath, nextRuntime);
         await handlers.onRuntimeSaved(nextRuntime);
 
+        const runTests = parseRequestedTests(getString(body.runTests));
+        const testText = getString(body.testText) ?? "Task complete. Build passed and your results are ready.";
+        const tests = runTests.length > 0
+          ? await runSetupTests(nextRuntime, runTests, testText)
+          : undefined;
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           ok: true,
-          missingConfig: getMissingConfigFields(nextRuntime)
+          missingConfig: getMissingConfigFields(nextRuntime),
+          keyStatus: buildKeyStatusPayload(nextRuntime),
+          tests
         }));
         return;
       }

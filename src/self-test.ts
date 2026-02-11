@@ -11,7 +11,7 @@ import {
 const argv = process.argv.slice(2);
 const { args, runtime } = await loadRuntime(argv);
 
-const text = getString(args["text"]) ?? "simple-notify-mcp self-test";
+const text = getString(args["text"]) ?? "Task complete. Build passed and your results are ready.";
 const ttsEnabled = isTtsAvailable(runtime) && args["tts"] !== false;
 const telegramEnabled = Boolean(runtime.keys.telegram?.botToken && runtime.telegram.chatId) &&
   args["telegram"] !== false;
