@@ -1,24 +1,43 @@
 import { existsSync } from "node:fs";
-import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-export type TtsConfig = {
+export type TtsProvider = "openai";
+
+export type TtsParams = {
   model?: string;
   voice?: string;
   speed?: number;
 };
 
+export type TtsConfig = {
+  provider: TtsProvider;
+  params: TtsParams;
+};
+
 export type TelegramConfig = {
-  botToken?: string;
   chatId?: string;
 };
 
+export type KeysConfig = {
+  openai?: {
+    apiKey?: string;
+  };
+  telegram?: {
+    botToken?: string;
+  };
+};
+
 export type FileConfig = {
-  tts?: TtsConfig;
+  tts?: {
+    provider?: TtsProvider;
+    params?: TtsParams;
+  };
   telegram?: TelegramConfig;
+  keys?: KeysConfig;
 };
 
 export type CliArgs = Record<string, string | boolean>;
@@ -26,6 +45,7 @@ export type CliArgs = Record<string, string | boolean>;
 export type RuntimeConfig = {
   tts: TtsConfig;
   telegram: TelegramConfig;
+  keys: KeysConfig;
 };
 
 export type RuntimeState = {
@@ -42,11 +62,13 @@ export function parseArgs(argv: string[]): CliArgs {
     if (!raw.startsWith("--")) {
       continue;
     }
+
     const arg = raw.slice(2);
     if (arg.startsWith("no-")) {
       out[arg.slice(3)] = false;
       continue;
     }
+
     const eqIndex = arg.indexOf("=");
     if (eqIndex >= 0) {
       const key = arg.slice(0, eqIndex);
@@ -54,6 +76,7 @@ export function parseArgs(argv: string[]): CliArgs {
       out[key] = value;
       continue;
     }
+
     const next = argv[i + 1];
     if (next && !next.startsWith("--")) {
       out[arg] = next;
@@ -62,12 +85,16 @@ export function parseArgs(argv: string[]): CliArgs {
       out[arg] = true;
     }
   }
+
   return out;
 }
 
 export function getString(value: string | boolean | undefined): string | undefined {
-  if (typeof value === "string" && value.trim() !== "") {
-    return value.trim();
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed !== "") {
+      return trimmed;
+    }
   }
   return undefined;
 }
@@ -80,6 +107,17 @@ export function getNumber(value: string | boolean | undefined): number | undefin
     }
   }
   return undefined;
+}
+
+export function isEnabledFlag(value: string | boolean | undefined): boolean {
+  if (value === true) {
+    return true;
+  }
+  if (value === false || value === undefined) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
 export function defaultConfigPath(): string {
@@ -108,19 +146,40 @@ export async function loadConfig(configPath: string, explicit: boolean): Promise
   }
 }
 
+function normalizeProvider(value: string | undefined): TtsProvider {
+  if (value === "openai") {
+    return "openai";
+  }
+  return "openai";
+}
+
 export function buildRuntimeConfig(args: CliArgs, fileConfig: FileConfig): RuntimeConfig {
+  const providerRaw = getString(args["tts-provider"]) ?? fileConfig.tts?.provider;
+  const provider = normalizeProvider(providerRaw);
+
   const tts: TtsConfig = {
-    model: getString(args["model"]) ?? fileConfig.tts?.model ?? "gpt-4o-mini-tts",
-    voice: getString(args["voice"]) ?? fileConfig.tts?.voice ?? "alloy",
-    speed: getNumber(args["speed"]) ?? fileConfig.tts?.speed ?? 1.0
+    provider,
+    params: {
+      model: getString(args["model"]) ?? fileConfig.tts?.params?.model ?? "gpt-4o-mini-tts",
+      voice: getString(args["voice"]) ?? fileConfig.tts?.params?.voice ?? "alloy",
+      speed: getNumber(args["speed"]) ?? fileConfig.tts?.params?.speed ?? 1.0
+    }
   };
 
   const telegram: TelegramConfig = {
-    botToken: getString(args["telegram-bot-token"]) ?? fileConfig.telegram?.botToken,
     chatId: getString(args["telegram-chat-id"]) ?? fileConfig.telegram?.chatId
   };
 
-  return { tts, telegram };
+  const keys: KeysConfig = {
+    openai: {
+      apiKey: getString(args["openai-api-key"]) ?? fileConfig.keys?.openai?.apiKey
+    },
+    telegram: {
+      botToken: getString(args["telegram-bot-token"]) ?? fileConfig.keys?.telegram?.botToken
+    }
+  };
+
+  return { tts, telegram, keys };
 }
 
 export async function loadRuntime(argv: string[]): Promise<RuntimeState> {
@@ -150,11 +209,7 @@ async function runCommand(command: string, args: string[]): Promise<void> {
   });
 }
 
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number
-): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -168,6 +223,42 @@ export function hasSystemTtsSupport(): boolean {
   return process.platform === "darwin";
 }
 
+export function getOpenAIKey(runtime: RuntimeConfig): string | undefined {
+  const envKey = getString(process.env.OPENAI_API_KEY);
+  if (envKey) {
+    return envKey;
+  }
+  return getString(runtime.keys.openai?.apiKey);
+}
+
+export function getTelegramBotToken(runtime: RuntimeConfig): string | undefined {
+  return getString(runtime.keys.telegram?.botToken);
+}
+
+export function isTtsAvailable(runtime: RuntimeConfig): boolean {
+  return Boolean(getOpenAIKey(runtime)) || hasSystemTtsSupport();
+}
+
+export function isTelegramConfigured(runtime: RuntimeConfig): boolean {
+  return Boolean(getTelegramBotToken(runtime) && getString(runtime.telegram.chatId));
+}
+
+export function getMissingConfigFields(runtime: RuntimeConfig): string[] {
+  const missing: string[] = [];
+
+  if (!getOpenAIKey(runtime)) {
+    missing.push("keys.openai.apiKey");
+  }
+  if (!getTelegramBotToken(runtime)) {
+    missing.push("keys.telegram.botToken");
+  }
+  if (!getString(runtime.telegram.chatId)) {
+    missing.push("telegram.chatId");
+  }
+
+  return missing;
+}
+
 async function playAudioFile(filePath: string): Promise<void> {
   await runCommand("afplay", [filePath]);
 }
@@ -179,28 +270,24 @@ async function speakSystem(text: string, config: TtsConfig): Promise<void> {
   }
 
   const args: string[] = [];
-  if (config.voice) {
-    args.push("-v", config.voice);
+  const voice = getString(config.params.voice);
+  if (voice) {
+    args.push("-v", voice);
   }
   args.push(trimmed);
 
   await runCommand("say", args);
 }
 
-async function speakOpenAI(text: string, config: TtsConfig): Promise<void> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is missing");
-  }
-
+async function speakOpenAI(text: string, config: TtsConfig, apiKey: string): Promise<void> {
   const trimmed = text.trim();
   if (!hasNonEmptyText(trimmed)) {
     return;
   }
 
-  const model = config.model ?? "gpt-4o-mini-tts";
-  const voice = config.voice ?? "alloy";
-  const speed = config.speed ?? 1.0;
+  const model = config.params.model ?? "gpt-4o-mini-tts";
+  const voice = config.params.voice ?? "alloy";
+  const speed = config.params.speed ?? 1.0;
   const format = "mp3";
 
   const response = await fetchWithTimeout(
@@ -230,6 +317,7 @@ async function speakOpenAI(text: string, config: TtsConfig): Promise<void> {
   const data = Buffer.from(await response.arrayBuffer());
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "simple-notify-mcp-"));
   const filePath = path.join(tmpDir, `speech.${format}`);
+
   try {
     await writeFile(filePath, data);
     await playAudioFile(filePath);
@@ -238,13 +326,13 @@ async function speakOpenAI(text: string, config: TtsConfig): Promise<void> {
   }
 }
 
-export async function speakText(text: string, config: TtsConfig): Promise<void> {
-  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+export async function speakText(text: string, runtime: RuntimeConfig): Promise<void> {
+  const openAIKey = getOpenAIKey(runtime);
   const hasSystem = hasSystemTtsSupport();
 
-  if (hasOpenAI) {
+  if (openAIKey) {
     try {
-      await speakOpenAI(text, config);
+      await speakOpenAI(text, runtime.tts, openAIKey);
       return;
     } catch (err) {
       if (!hasSystem) {
@@ -256,27 +344,29 @@ export async function speakText(text: string, config: TtsConfig): Promise<void> 
   }
 
   if (hasSystem) {
-    await speakSystem(text, config);
+    await speakSystem(text, runtime.tts);
     return;
   }
 
-  throw new Error("No TTS backend available (OPENAI_API_KEY missing and system TTS unsupported)");
+  throw new Error("No TTS backend available (OPENAI_API_KEY/keys.openai.apiKey missing and system TTS unsupported)");
 }
 
-export async function sendTelegram(text: string, config: TelegramConfig): Promise<void> {
-  if (!config.botToken || !config.chatId) {
+export async function sendTelegram(text: string, runtime: RuntimeConfig): Promise<void> {
+  const botToken = getTelegramBotToken(runtime);
+  const chatId = getString(runtime.telegram.chatId);
+  if (!botToken || !chatId) {
     throw new Error("Telegram config missing");
   }
 
   const response = await fetchWithTimeout(
-    `https://api.telegram.org/bot${config.botToken}/sendMessage`,
+    `https://api.telegram.org/bot${botToken}/sendMessage`,
     {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        chat_id: config.chatId,
+        chat_id: chatId,
         text
       })
     },
@@ -286,5 +376,65 @@ export async function sendTelegram(text: string, config: TelegramConfig): Promis
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Telegram error (${response.status}): ${errorText}`);
+  }
+}
+
+function withDefinedProps<T extends Record<string, unknown>>(input: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== "") {
+      out[key as keyof T] = value as T[keyof T];
+    }
+  }
+  return out;
+}
+
+export async function saveRuntimeConfig(configPath: string, runtime: RuntimeConfig): Promise<void> {
+  const ttsParams = withDefinedProps({
+    model: runtime.tts.params.model,
+    voice: runtime.tts.params.voice,
+    speed: runtime.tts.params.speed
+  });
+
+  const keysOpenAI = withDefinedProps({
+    apiKey: runtime.keys.openai?.apiKey
+  });
+
+  const keysTelegram = withDefinedProps({
+    botToken: runtime.keys.telegram?.botToken
+  });
+
+  const telegram = withDefinedProps({
+    chatId: runtime.telegram.chatId
+  });
+
+  const payload: FileConfig = {
+    tts: {
+      provider: runtime.tts.provider,
+      params: ttsParams as TtsParams
+    },
+    ...(Object.keys(telegram).length > 0 ? { telegram: telegram as TelegramConfig } : {}),
+    keys: {
+      ...(Object.keys(keysOpenAI).length > 0 ? { openai: keysOpenAI as { apiKey?: string } } : {}),
+      ...(Object.keys(keysTelegram).length > 0 ? { telegram: keysTelegram as { botToken?: string } } : {})
+    }
+  };
+
+  const configDir = path.dirname(configPath);
+  const tmpPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
+
+  await mkdir(configDir, { recursive: true });
+  await writeFile(tmpPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600, encoding: "utf8" });
+  try {
+    await chmod(tmpPath, 0o600);
+  } catch {
+    // Best effort; chmod may not be supported on all platforms.
+  }
+
+  try {
+    await rename(tmpPath, configPath);
+  } catch (err) {
+    await rm(tmpPath, { force: true });
+    throw err;
   }
 }

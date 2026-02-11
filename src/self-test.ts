@@ -14,7 +14,7 @@ const { args, runtime } = await loadRuntime(argv);
 const text = getString(args["text"]) ?? "simple-notify-mcp self-test";
 const ttsEnabled = (Boolean(process.env.OPENAI_API_KEY) || hasSystemTtsSupport()) &&
   args["tts"] !== false;
-const telegramEnabled = Boolean(runtime.telegram.botToken && runtime.telegram.chatId) &&
+const telegramEnabled = Boolean(runtime.keys.telegram?.botToken && runtime.telegram.chatId) &&
   args["telegram"] !== false;
 
 if (!ttsEnabled && !telegramEnabled) {
@@ -27,7 +27,7 @@ let failed = false;
 if (ttsEnabled) {
   try {
     console.error("[self-test] tts_say: starting");
-    await speakText(text, runtime.tts);
+    await speakText(text, runtime);
     console.error("[self-test] tts_say: ok");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -39,7 +39,7 @@ if (ttsEnabled) {
 if (telegramEnabled) {
   try {
     console.error("[self-test] telegram_notify: starting");
-    await sendTelegram(text, runtime.telegram);
+    await sendTelegram(text, runtime);
     console.error("[self-test] telegram_notify: ok");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

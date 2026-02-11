@@ -4,11 +4,17 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import process from "node:process";
 import {
-  hasSystemTtsSupport,
+  getMissingConfigFields,
+  getString,
+  isEnabledFlag,
+  isTelegramConfigured,
+  isTtsAvailable,
   loadRuntime,
   sendTelegram,
-  speakText
+  speakText,
+  type RuntimeConfig
 } from "./runtime.js";
+import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
 
 const VERSION = "0.1.0";
 const SERVER_NAME = "simple_notify";
@@ -34,13 +40,35 @@ function errorResponse(err: unknown) {
   };
 }
 
-const argv = process.argv.slice(2);
-const { runtime } = await loadRuntime(argv);
+type CapabilityState = {
+  hasTts: boolean;
+  hasTelegram: boolean;
+  missingConfig: string[];
+};
 
-const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
-const hasSystemTts = hasSystemTtsSupport();
-const hasTts = hasOpenAI || hasSystemTts;
-const hasTelegram = Boolean(runtime.telegram.botToken && runtime.telegram.chatId);
+const argv = process.argv.slice(2);
+const loaded = await loadRuntime(argv);
+let runtime: RuntimeConfig = loaded.runtime;
+const { args, configPath } = loaded;
+
+const setupWebEnabled = isEnabledFlag(args["enable-setup-web"]);
+const setupHost = getString(args["setup-host"]) ?? "127.0.0.1";
+const setupPortRaw = Number(getString(args["setup-port"]) ?? "21420");
+const setupPort = Number.isInteger(setupPortRaw) && setupPortRaw > 0 && setupPortRaw <= 65535
+  ? setupPortRaw
+  : 21420;
+const setupToken = getString(args["setup-token"]);
+
+let setupWeb: SetupWebController | null = null;
+let setupWebError: string | null = null;
+
+function computeCapabilities(): CapabilityState {
+  return {
+    hasTts: isTtsAvailable(runtime),
+    hasTelegram: isTelegramConfigured(runtime),
+    missingConfig: getMissingConfigFields(runtime)
+  };
+}
 
 const server = new McpServer(
   {
@@ -53,62 +81,148 @@ const server = new McpServer(
   }
 );
 
+const emptySchema = z.object({});
 const ttsSchema = z.object({
   text: z.string().min(1)
 });
-
 const telegramSchema = z.object({
   text: z.string().min(1)
 });
 
-if (hasTts) {
-  server.registerTool(
-    "tts_say",
-    {
-      title: "Speak text via OpenAI TTS",
-      description: "Speak a short message. Uses OpenAI TTS when available, else system TTS.",
-      inputSchema: ttsSchema
-    },
-    async (params: z.infer<typeof ttsSchema>) => {
-      try {
-        await speakText(params.text, runtime.tts);
-        return okResponse({ accepted: true });
-      } catch (err) {
-        return errorResponse(err);
-      }
+function statusPayload(): Record<string, unknown> {
+  const capability = computeCapabilities();
+  return {
+    ok: true,
+    version: VERSION,
+    configPath,
+    ttsAvailable: capability.hasTts,
+    telegramAvailable: capability.hasTelegram,
+    missingConfig: capability.missingConfig,
+    setupWeb: {
+      enabled: setupWebEnabled,
+      running: Boolean(setupWeb),
+      url: setupWeb?.state.url ?? null,
+      host: setupWeb?.state.host ?? null,
+      port: setupWeb?.state.port ?? null,
+      error: setupWebError,
+      hint: setupWebEnabled
+        ? (setupWeb
+          ? "Open setupWeb.url in your local browser to configure."
+          : "Setup web is enabled but not running (config may already be complete or startup failed).")
+        : "Start server with --enable-setup-web to enable local configuration UI."
     }
-  );
-} else {
-  console.error("[simple-notify-mcp] TTS unavailable; tts_say not registered");
+  };
 }
 
-if (hasTelegram) {
-  server.registerTool(
-    "telegram_notify",
-    {
-      title: "Send Telegram notification",
-      description: "Send a short notification message to Telegram.",
-      inputSchema: telegramSchema
-    },
-    async (params: z.infer<typeof telegramSchema>) => {
-      try {
-        await sendTelegram(params.text, runtime.telegram);
-        return okResponse({ accepted: true });
-      } catch (err) {
-        return errorResponse(err);
-      }
+const statusTool = server.registerTool(
+  "simple_notify_status",
+  {
+    title: "Simple Notify status",
+    description: "Read current capabilities and optional setup-web URL for configuration guidance.",
+    inputSchema: emptySchema
+  },
+  async () => okResponse(statusPayload())
+);
+
+const ttsTool = server.registerTool(
+  "tts_say",
+  {
+    title: "Speak text",
+    description: "Speak a short message. Uses OpenAI TTS when available, else system TTS.",
+    inputSchema: ttsSchema
+  },
+  async (params: z.infer<typeof ttsSchema>) => {
+    try {
+      await speakText(params.text, runtime);
+      return okResponse({ accepted: true });
+    } catch (err) {
+      return errorResponse(err);
     }
-  );
-} else {
-  console.error("[simple-notify-mcp] Telegram config missing; telegram_notify not registered");
+  }
+);
+
+const telegramTool = server.registerTool(
+  "telegram_notify",
+  {
+    title: "Send Telegram notification",
+    description: "Send a short notification message to Telegram.",
+    inputSchema: telegramSchema
+  },
+  async (params: z.infer<typeof telegramSchema>) => {
+    try {
+      await sendTelegram(params.text, runtime);
+      return okResponse({ accepted: true });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+function refreshToolAvailability(): void {
+  const capability = computeCapabilities();
+  ttsTool.update({ enabled: capability.hasTts });
+  telegramTool.update({ enabled: capability.hasTelegram });
+  statusTool.update({ enabled: true });
+}
+
+refreshToolAvailability();
+
+if (setupWebEnabled) {
+  const initialMissing = computeCapabilities().missingConfig;
+  if (initialMissing.length > 0) {
+    try {
+      setupWeb = await startSetupWebServer(
+        {
+          host: setupHost,
+          port: setupPort,
+          token: setupToken,
+          configPath
+        },
+        {
+          getRuntime: () => runtime,
+          onRuntimeSaved: async nextRuntime => {
+            runtime = nextRuntime;
+            refreshToolAvailability();
+          }
+        }
+      );
+      console.error(`[simple-notify-mcp] setup web ready at ${setupWeb.state.url} (local only)`);
+    } catch (err) {
+      setupWebError = err instanceof Error ? err.message : String(err);
+      console.error(`[simple-notify-mcp] setup web failed: ${setupWebError}`);
+    }
+  } else {
+    console.error("[simple-notify-mcp] setup web enabled but not started (config already complete)");
+  }
 }
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
 const enabled = [
-  hasTts ? "tts_say" : null,
-  hasTelegram ? "telegram_notify" : null
-].filter(Boolean).join(", ") || "none";
+  computeCapabilities().hasTts ? "tts_say" : null,
+  computeCapabilities().hasTelegram ? "telegram_notify" : null,
+  "simple_notify_status"
+].filter(Boolean).join(", ");
 
 console.error(`[simple-notify-mcp] ready; tools: ${enabled}`);
+
+const shutdown = async (): Promise<void> => {
+  if (setupWeb) {
+    try {
+      await setupWeb.close();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[simple-notify-mcp] setup web close error: ${message}`);
+    }
+  }
+  process.exit(0);
+};
+
+process.once("SIGINT", () => {
+  void shutdown();
+});
+
+process.once("SIGTERM", () => {
+  void shutdown();
+});

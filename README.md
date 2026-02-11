@@ -1,12 +1,12 @@
 # simple-notify-mcp
 
-KISS MCP server that exposes two tools:
-- `tts_say` (speaks text via OpenAI TTS with system fallback)
-- `telegram_notify` (sends a Telegram message)
+KISS MCP server for spoken and Telegram notifications.
 
-Tools are registered based on available capabilities:
-- `tts_say`: OpenAI key or macOS system TTS
-- `telegram_notify`: Telegram bot token + chat id
+## Tools
+
+- `simple_notify_status`: always available; returns capability/config/setup-web state.
+- `tts_say`: available when OpenAI key or macOS system TTS is available.
+- `telegram_notify`: available when Telegram bot token + chat id are configured.
 
 ## Install (npx)
 
@@ -14,44 +14,75 @@ Tools are registered based on available capabilities:
 codex mcp add simple-notify -- npx -y simple-notify-mcp@latest
 ```
 
-## Configuration
+## Local add (from repo)
 
-- Env (optional for TTS):
-  - `OPENAI_API_KEY`
+```bash
+codex mcp add simple-notify -- \
+  node /Users/xorbot/work/git/agent-dock/tools/simple-notify-mcp/build/index.js
+```
 
-- Config file (optional):
-  - `$XDG_CONFIG_HOME/simple-notify-mcp/config.json`
-  - or `~/.config/simple-notify-mcp/config.json`
-  - or override with `--config /path/to/config.json`
+## Configuration schema
 
-### Example config.json
+Config file path (default):
+- `$XDG_CONFIG_HOME/simple-notify-mcp/config.json`
+- or `~/.config/simple-notify-mcp/config.json`
+
+`OPENAI_API_KEY` env still works and takes precedence over `keys.openai.apiKey`.
 
 ```json
 {
   "tts": {
-    "model": "gpt-4o-mini-tts",
-    "voice": "alloy",
-    "speed": 1.0
+    "provider": "openai",
+    "params": {
+      "model": "gpt-4o-mini-tts",
+      "voice": "alloy",
+      "speed": 1.0
+    }
   },
   "telegram": {
-    "botToken": "123:ABC",
     "chatId": "123456789"
+  },
+  "keys": {
+    "openai": {
+      "apiKey": "sk-..."
+    },
+    "telegram": {
+      "botToken": "123:ABC"
+    }
   }
 }
 ```
 
-## CLI overrides
+## Optional setup web UI (disabled by default)
+
+Enable setup UI only when you want browser-based config:
 
 ```bash
-npx -y simple-notify-mcp@latest \
-  --model gpt-4o-mini-tts \
-  --voice alloy \
-  --speed 1.0 \
-  --telegram-bot-token 123:ABC \
-  --telegram-chat-id 123456789
+codex mcp add simple-notify -- \
+  node /Users/xorbot/work/git/agent-dock/tools/simple-notify-mcp/build/index.js \
+  --enable-setup-web \
+  --setup-port 21420
 ```
 
-## Tools
+Flags:
+- `--enable-setup-web` (default off)
+- `--setup-host` (default `127.0.0.1`; non-loopback values are clamped to `127.0.0.1`)
+- `--setup-port` (default `21420`)
+- `--setup-token` (optional; if omitted, generated per run)
+
+Behavior:
+- setup web starts only if enabled and config is incomplete.
+- binds locally only.
+- setup URL includes the current run token query param.
+- check `simple_notify_status` to discover setup URL and missing fields.
+
+## Tool contracts
+
+### simple_notify_status
+Input:
+```json
+{}
+```
 
 ### tts_say
 Input:
@@ -71,7 +102,7 @@ Input:
 npm run self-test -- --text "simple-notify-mcp self-test"
 ```
 
-Disable one side if you only want to test the other:
+Disable one side if needed:
 
 ```bash
 npm run self-test -- --no-tts
@@ -79,7 +110,7 @@ npm run self-test -- --no-telegram
 ```
 
 ## Notes
-- `tts_say` does not accept voice/model/format/speed in tool input. These are configured by server defaults/config file.
-- If OpenAI TTS is unavailable, server falls back to macOS `say` when available.
+
+- `tts_say` input is text-only; model/voice/speed are server config.
+- OpenAI TTS failure falls back to macOS `say` when available.
 - OpenAI playback uses macOS `afplay`.
-- If a tool’s required config is missing, it is not registered.
