@@ -10,41 +10,33 @@ KISS MCP server for spoken and Telegram notifications.
 - `telegram_read_incoming`: available when Telegram bot token + chat id are configured; reads incoming updates for configured chat.
 - `telegram_read_media`: available when Telegram bot token + chat id are configured; reads image updates and can return MCP image content blocks.
 
-## Quickstart (npx, recommended)
+## Install (npx)
 
-Do these steps in this exact order.
+### 1) Recommended: keep setup web always enabled
 
-1. Add with setup web enabled:
+Use this if you want easy reconfiguration anytime.
 
 ```bash
+codex mcp remove simple-notify
 codex mcp add simple-notify -- \
   npx -y simple-notify-mcp@latest \
-  --enable-setup-web \
-  --setup-port 21420
+  --enable-setup-web
 ```
 
-2. Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status` and send you `setupWeb.url`, or call `simple_notify_status` yourself and copy the link.
-3. Save your settings (provider + keys) in the web panel.
-4. Re-add in normal mode (without setup web):
+Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status` and send you `setupWeb.url`, then open that link.
+
+### 2) Minimal runtime: no setup web
+
+Use this if config is already done and you do not want the setup server running.
 
 ```bash
 codex mcp remove simple-notify
 codex mcp add simple-notify -- npx -y simple-notify-mcp@latest
 ```
 
-5. Verify by calling:
-- `simple_notify_status`
-- `tts_say` with `{ "text": "test" }`
+If you need to change provider/keys later, switch back to mode 1.
 
-6. If you need to change provider or keys later, run:
-
-```bash
-codex mcp remove simple-notify
-```
-
-Then repeat from step 1.
-
-If you want env keys from the start:
+Optional: pass API keys via env when adding:
 
 ```bash
 codex mcp add simple-notify -- \
@@ -55,22 +47,41 @@ codex mcp add simple-notify -- \
   --setup-port 21420
 ```
 
-## Common Mistake
+## Install (Claude Code)
 
-If `simple_notify_status` shows:
-- `setupWeb.enabled: false`
-- `setupWeb.url: null`
+### 1) Recommended: keep setup web always enabled
 
-then you added server without `--enable-setup-web`.
-
-Fix:
+Use this if you want easy reconfiguration anytime.
 
 ```bash
-codex mcp remove simple-notify
-codex mcp add simple-notify -- \
+claude mcp remove simple-notify
+claude mcp add --transport stdio simple-notify -- \
   npx -y simple-notify-mcp@latest \
-  --enable-setup-web \
-  --setup-port 21420
+  --enable-setup-web
+```
+
+Ask Claude Code to run `simple_notify_status` and share `setupWeb.url`, then open that link.
+
+### 2) Minimal runtime: no setup web
+
+Use this if config is already done and you do not want the setup server running.
+
+```bash
+claude mcp remove simple-notify
+claude mcp add --transport stdio simple-notify -- npx -y simple-notify-mcp@latest
+```
+
+If you need to change provider/keys later, switch back to mode 1.
+
+Optional: pass API keys via env when adding:
+
+```bash
+claude mcp add --transport stdio \
+  --env OPENAI_API_KEY="$OPENAI_API_KEY" \
+  --env FAL_KEY="$FAL_KEY" \
+  simple-notify -- \
+  npx -y simple-notify-mcp@latest \
+  --enable-setup-web
 ```
 
 ## Configuration Schema
