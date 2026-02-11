@@ -2,6 +2,14 @@
   "name": "simple-notify-mcp",
   "version": "0.1.2",
   "description": "KISS MCP server for TTS + Telegram notifications",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pintar-team/simple-notify-mcp.git"
+  },
+  "homepage": "https://github.com/pintar-team/simple-notify-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/pintar-team/simple-notify-mcp/issues"
+  },
   "keywords": [
     "mcp",
     "codex",
