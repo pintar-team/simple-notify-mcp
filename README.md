@@ -17,8 +17,17 @@ codex mcp add simple-notify -- npx -y simple-notify-mcp@latest
 ## Local add (from repo)
 
 ```bash
+# from tools/simple-notify-mcp directory
 codex mcp add simple-notify -- \
-  node /Users/xorbot/work/git/agent-dock/tools/simple-notify-mcp/build/index.js
+  node ./build/index.js
+```
+
+If you want OpenAI TTS without writing key into config:
+
+```bash
+# from tools/simple-notify-mcp directory
+codex mcp add simple-notify --env OPENAI_API_KEY="$OPENAI_API_KEY" -- \
+  node ./build/index.js
 ```
 
 ## Configuration schema
@@ -58,8 +67,9 @@ Config file path (default):
 Enable setup UI only when you want browser-based config:
 
 ```bash
+# from tools/simple-notify-mcp directory
 codex mcp add simple-notify -- \
-  node /Users/xorbot/work/git/agent-dock/tools/simple-notify-mcp/build/index.js \
+  node ./build/index.js \
   --enable-setup-web \
   --setup-port 21420
 ```
@@ -73,6 +83,7 @@ Flags:
 Behavior:
 - setup web starts only if enabled and config is incomplete.
 - binds locally only.
+- if `--setup-port` is busy, server uses the next free local port.
 - setup URL includes the current run token query param.
 - check `simple_notify_status` to discover setup URL and missing fields.
 
