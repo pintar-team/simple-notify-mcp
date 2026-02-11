@@ -34,6 +34,14 @@ codex mcp add simple-notify -- npx -y simple-notify-mcp@latest
 - `simple_notify_status`
 - `tts_say` with `{ "text": "test" }`
 
+6. If you need to change provider or keys later, run:
+
+```bash
+codex mcp remove simple-notify
+```
+
+Then repeat from step 1.
+
 If you want env keys from the start:
 
 ```bash
@@ -43,27 +51,6 @@ codex mcp add simple-notify -- \
   -- npx -y simple-notify-mcp@latest \
   --enable-setup-web \
   --setup-port 21420
-```
-
-## Quickstart (local repo)
-
-From `tools/simple-notify-mcp`:
-
-1. Add with setup web:
-
-```bash
-codex mcp add simple-notify -- \
-  node ./build/index.js \
-  --enable-setup-web \
-  --setup-port 21420
-```
-
-2. Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status` and send you `setupWeb.url`, or call `simple_notify_status` yourself and copy the link.
-3. Re-add without setup web:
-
-```bash
-codex mcp remove simple-notify
-codex mcp add simple-notify -- node ./build/index.js
 ```
 
 ## Common Mistake
