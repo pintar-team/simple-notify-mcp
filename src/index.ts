@@ -16,7 +16,7 @@ import {
 } from "./runtime.js";
 import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const SERVER_NAME = "simple_notify";
 const SERVER_TITLE = "Simple Notify MCP";
 

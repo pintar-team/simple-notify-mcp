@@ -98,9 +98,24 @@ Env key precedence:
         "speed": 1,
         "vol": 1,
         "pitch": 0,
+        "emotion": "neutral",
         "englishNormalization": false,
         "languageBoost": "auto",
-        "outputFormat": "url"
+        "outputFormat": "url",
+        "audioFormat": "mp3",
+        "audioSampleRate": 32000,
+        "audioChannel": 1,
+        "audioBitrate": 128000,
+        "normalizationEnabled": true,
+        "normalizationTargetLoudness": -18,
+        "normalizationTargetRange": 8,
+        "normalizationTargetPeak": -0.5,
+        "voiceModifyPitch": 0,
+        "voiceModifyIntensity": 0,
+        "voiceModifyTimbre": 0,
+        "pronunciationToneList": [
+          "燕少飞/(yan4)(shao3)(fei1)"
+        ]
       },
       "falElevenlabs": {
         "voice": "Rachel",
@@ -108,6 +123,7 @@ Env key precedence:
         "similarityBoost": 0.75,
         "style": 0,
         "speed": 1,
+        "timestamps": false,
         "languageCode": "en",
         "applyTextNormalization": "auto"
       }
@@ -132,6 +148,9 @@ Env key precedence:
   }
 }
 ```
+
+MiniMax voices available in setup UI:
+- `Wise_Woman`, `Friendly_Person`, `Inspirational_girl`, `Deep_Voice_Man`, `Calm_Woman`, `Casual_Guy`, `Lively_Girl`, `Patient_Man`, `Young_Knight`, `Determined_Man`, `Lovely_Girl`, `Decent_Boy`, `Imposing_Manner`, `Elegant_Man`, `Abbess`, `Sweet_Girl_2`, `Exuberant_Girl`
 
 ## Setup Web UI Flags (disabled by default)
 

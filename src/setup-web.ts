@@ -1,8 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
+  FAL_ELEVEN_VOICES,
   FAL_ELEVEN_APPLY_TEXT_NORMALIZATION_OPTIONS,
+  FAL_MINIMAX_AUDIO_BITRATES,
+  FAL_MINIMAX_AUDIO_CHANNELS,
+  FAL_MINIMAX_AUDIO_FORMATS,
+  FAL_MINIMAX_EMOTIONS,
   FAL_MINIMAX_LANGUAGE_BOOST_OPTIONS,
+  FAL_MINIMAX_SAMPLE_RATES,
+  FAL_MINIMAX_VOICES,
   OPENAI_RESPONSE_FORMATS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
@@ -53,14 +60,28 @@ type SubmittedSetupConfig = {
   falMinimaxSpeed?: string;
   falMinimaxVol?: string;
   falMinimaxPitch?: string;
+  falMinimaxEmotion?: string;
   falMinimaxEnglishNormalization?: string;
   falMinimaxLanguageBoost?: string;
   falMinimaxOutputFormat?: string;
+  falMinimaxAudioFormat?: string;
+  falMinimaxAudioSampleRate?: string;
+  falMinimaxAudioChannel?: string;
+  falMinimaxAudioBitrate?: string;
+  falMinimaxNormalizationEnabled?: string;
+  falMinimaxNormalizationTargetLoudness?: string;
+  falMinimaxNormalizationTargetRange?: string;
+  falMinimaxNormalizationTargetPeak?: string;
+  falMinimaxVoiceModifyPitch?: string;
+  falMinimaxVoiceModifyIntensity?: string;
+  falMinimaxVoiceModifyTimbre?: string;
+  falMinimaxPronunciationToneList?: string;
   falElevenVoice?: string;
   falElevenStability?: string;
   falElevenSimilarityBoost?: string;
   falElevenStyle?: string;
   falElevenSpeed?: string;
+  falElevenTimestamps?: string;
   falElevenLanguageCode?: string;
   falElevenApplyTextNormalization?: string;
   openaiApiKey?: string;
@@ -167,6 +188,35 @@ function normalizeFalMinimaxOutputFormat(value: string | undefined): "url" | "he
   return undefined;
 }
 
+function normalizeFalMinimaxEmotion(
+  value: string | undefined
+): RuntimeConfig["tts"]["params"]["falMinimax"]["emotion"] {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_EMOTIONS.includes(value as (typeof FAL_MINIMAX_EMOTIONS)[number])
+    ? value as RuntimeConfig["tts"]["params"]["falMinimax"]["emotion"]
+    : undefined;
+}
+
+function parseToneListInput(value: string | undefined): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const list = value
+    .split(/[\n,]/g)
+    .map(item => item.trim())
+    .filter(Boolean);
+  return list.length > 0 ? list : undefined;
+}
+
+function toneListToInput(value: string[] | undefined): string {
+  if (!value || value.length === 0) {
+    return "";
+  }
+  return value.join("\n");
+}
+
 function normalizeFalElevenApplyTextNormalization(value: string | undefined): "auto" | "on" | "off" | undefined {
   if (!value) {
     return undefined;
@@ -243,12 +293,37 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
   const falMinimaxSpeed = getNumber(incoming.falMinimaxSpeed) ?? current.tts.params.falMinimax.speed;
   const falMinimaxVol = getNumber(incoming.falMinimaxVol) ?? current.tts.params.falMinimax.vol;
   const falMinimaxPitch = getNumber(incoming.falMinimaxPitch) ?? current.tts.params.falMinimax.pitch;
+  const falMinimaxEmotion = normalizeFalMinimaxEmotion(getString(incoming.falMinimaxEmotion)) ??
+    current.tts.params.falMinimax.emotion;
   const falMinimaxEnglishNormalization = parseBooleanString(getString(incoming.falMinimaxEnglishNormalization)) ??
     current.tts.params.falMinimax.englishNormalization;
   const falMinimaxLanguageBoost = getString(incoming.falMinimaxLanguageBoost) ??
     current.tts.params.falMinimax.languageBoost;
   const falMinimaxOutputFormat = normalizeFalMinimaxOutputFormat(getString(incoming.falMinimaxOutputFormat)) ??
     current.tts.params.falMinimax.outputFormat;
+  const falMinimaxAudioFormat = getString(incoming.falMinimaxAudioFormat) ?? current.tts.params.falMinimax.audioFormat;
+  const falMinimaxAudioSampleRate = getNumber(incoming.falMinimaxAudioSampleRate) ??
+    current.tts.params.falMinimax.audioSampleRate;
+  const falMinimaxAudioChannel = getNumber(incoming.falMinimaxAudioChannel) ??
+    current.tts.params.falMinimax.audioChannel;
+  const falMinimaxAudioBitrate = getNumber(incoming.falMinimaxAudioBitrate) ??
+    current.tts.params.falMinimax.audioBitrate;
+  const falMinimaxNormalizationEnabled = parseBooleanString(getString(incoming.falMinimaxNormalizationEnabled)) ??
+    current.tts.params.falMinimax.normalizationEnabled;
+  const falMinimaxNormalizationTargetLoudness = getNumber(incoming.falMinimaxNormalizationTargetLoudness) ??
+    current.tts.params.falMinimax.normalizationTargetLoudness;
+  const falMinimaxNormalizationTargetRange = getNumber(incoming.falMinimaxNormalizationTargetRange) ??
+    current.tts.params.falMinimax.normalizationTargetRange;
+  const falMinimaxNormalizationTargetPeak = getNumber(incoming.falMinimaxNormalizationTargetPeak) ??
+    current.tts.params.falMinimax.normalizationTargetPeak;
+  const falMinimaxVoiceModifyPitch = getNumber(incoming.falMinimaxVoiceModifyPitch) ??
+    current.tts.params.falMinimax.voiceModifyPitch;
+  const falMinimaxVoiceModifyIntensity = getNumber(incoming.falMinimaxVoiceModifyIntensity) ??
+    current.tts.params.falMinimax.voiceModifyIntensity;
+  const falMinimaxVoiceModifyTimbre = getNumber(incoming.falMinimaxVoiceModifyTimbre) ??
+    current.tts.params.falMinimax.voiceModifyTimbre;
+  const falMinimaxPronunciationToneList = parseToneListInput(getString(incoming.falMinimaxPronunciationToneList)) ??
+    current.tts.params.falMinimax.pronunciationToneList;
 
   const falElevenVoice = getString(incoming.falElevenVoice) ?? current.tts.params.falElevenlabs.voice;
   const falElevenStability = getNumber(incoming.falElevenStability) ?? current.tts.params.falElevenlabs.stability;
@@ -256,6 +331,8 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
     current.tts.params.falElevenlabs.similarityBoost;
   const falElevenStyle = getNumber(incoming.falElevenStyle) ?? current.tts.params.falElevenlabs.style;
   const falElevenSpeed = getNumber(incoming.falElevenSpeed) ?? current.tts.params.falElevenlabs.speed;
+  const falElevenTimestamps = parseBooleanString(getString(incoming.falElevenTimestamps)) ??
+    current.tts.params.falElevenlabs.timestamps;
   const falElevenLanguageCode = getString(incoming.falElevenLanguageCode) ??
     current.tts.params.falElevenlabs.languageCode;
   const falElevenApplyTextNormalization = normalizeFalElevenApplyTextNormalization(
@@ -286,9 +363,22 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
           speed: falMinimaxSpeed,
           vol: falMinimaxVol,
           pitch: falMinimaxPitch,
+          emotion: falMinimaxEmotion,
           englishNormalization: falMinimaxEnglishNormalization,
           languageBoost: falMinimaxLanguageBoost,
-          outputFormat: falMinimaxOutputFormat
+          outputFormat: falMinimaxOutputFormat,
+          audioFormat: falMinimaxAudioFormat as RuntimeConfig["tts"]["params"]["falMinimax"]["audioFormat"],
+          audioSampleRate: falMinimaxAudioSampleRate as RuntimeConfig["tts"]["params"]["falMinimax"]["audioSampleRate"],
+          audioChannel: falMinimaxAudioChannel as RuntimeConfig["tts"]["params"]["falMinimax"]["audioChannel"],
+          audioBitrate: falMinimaxAudioBitrate as RuntimeConfig["tts"]["params"]["falMinimax"]["audioBitrate"],
+          normalizationEnabled: falMinimaxNormalizationEnabled,
+          normalizationTargetLoudness: falMinimaxNormalizationTargetLoudness,
+          normalizationTargetRange: falMinimaxNormalizationTargetRange,
+          normalizationTargetPeak: falMinimaxNormalizationTargetPeak,
+          voiceModifyPitch: falMinimaxVoiceModifyPitch,
+          voiceModifyIntensity: falMinimaxVoiceModifyIntensity,
+          voiceModifyTimbre: falMinimaxVoiceModifyTimbre,
+          pronunciationToneList: falMinimaxPronunciationToneList
         },
         falElevenlabs: {
           voice: falElevenVoice,
@@ -296,6 +386,7 @@ function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConf
           similarityBoost: falElevenSimilarityBoost,
           style: falElevenStyle,
           speed: falElevenSpeed,
+          timestamps: falElevenTimestamps,
           languageCode: falElevenLanguageCode,
           applyTextNormalization: falElevenApplyTextNormalization
         }
@@ -336,15 +427,37 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
   const falMinimaxSpeed = escapeHtml(String(runtime.tts.params.falMinimax.speed ?? 1.0));
   const falMinimaxVol = escapeHtml(String(runtime.tts.params.falMinimax.vol ?? 1.0));
   const falMinimaxPitch = escapeHtml(String(runtime.tts.params.falMinimax.pitch ?? 0));
+  const falMinimaxEmotion = escapeHtml(runtime.tts.params.falMinimax.emotion ?? "");
   const falMinimaxEnglishNormalization = escapeHtml(boolToString(runtime.tts.params.falMinimax.englishNormalization));
   const falMinimaxLanguageBoost = escapeHtml(runtime.tts.params.falMinimax.languageBoost ?? "auto");
   const falMinimaxOutputFormat = escapeHtml(runtime.tts.params.falMinimax.outputFormat ?? "url");
+  const falMinimaxAudioFormat = escapeHtml(runtime.tts.params.falMinimax.audioFormat ?? "mp3");
+  const falMinimaxAudioSampleRate = escapeHtml(String(runtime.tts.params.falMinimax.audioSampleRate ?? 32000));
+  const falMinimaxAudioChannel = escapeHtml(String(runtime.tts.params.falMinimax.audioChannel ?? 1));
+  const falMinimaxAudioBitrate = escapeHtml(String(runtime.tts.params.falMinimax.audioBitrate ?? 128000));
+  const falMinimaxNormalizationEnabled = escapeHtml(boolToString(runtime.tts.params.falMinimax.normalizationEnabled));
+  const falMinimaxNormalizationTargetLoudness = escapeHtml(
+    String(runtime.tts.params.falMinimax.normalizationTargetLoudness ?? -18)
+  );
+  const falMinimaxNormalizationTargetRange = escapeHtml(
+    String(runtime.tts.params.falMinimax.normalizationTargetRange ?? 8)
+  );
+  const falMinimaxNormalizationTargetPeak = escapeHtml(
+    String(runtime.tts.params.falMinimax.normalizationTargetPeak ?? -0.5)
+  );
+  const falMinimaxVoiceModifyPitch = escapeHtml(String(runtime.tts.params.falMinimax.voiceModifyPitch ?? 0));
+  const falMinimaxVoiceModifyIntensity = escapeHtml(String(runtime.tts.params.falMinimax.voiceModifyIntensity ?? 0));
+  const falMinimaxVoiceModifyTimbre = escapeHtml(String(runtime.tts.params.falMinimax.voiceModifyTimbre ?? 0));
+  const falMinimaxPronunciationToneList = escapeHtml(
+    toneListToInput(runtime.tts.params.falMinimax.pronunciationToneList)
+  );
 
   const falElevenVoice = escapeHtml(runtime.tts.params.falElevenlabs.voice ?? "Rachel");
   const falElevenStability = escapeHtml(String(runtime.tts.params.falElevenlabs.stability ?? 0.5));
   const falElevenSimilarityBoost = escapeHtml(String(runtime.tts.params.falElevenlabs.similarityBoost ?? 0.75));
   const falElevenStyle = escapeHtml(String(runtime.tts.params.falElevenlabs.style ?? 0));
   const falElevenSpeed = escapeHtml(String(runtime.tts.params.falElevenlabs.speed ?? 1));
+  const falElevenTimestamps = escapeHtml(boolToString(runtime.tts.params.falElevenlabs.timestamps));
   const falElevenLanguageCode = escapeHtml(runtime.tts.params.falElevenlabs.languageCode ?? "");
   const falElevenApplyTextNormalization = escapeHtml(runtime.tts.params.falElevenlabs.applyTextNormalization ?? "auto");
   const ttsAsyncByDefault = escapeHtml(boolToString(runtime.misc.ttsAsyncByDefault));
@@ -354,12 +467,30 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
   const openaiModelOptions = buildOptions(OPENAI_TTS_MODELS, openaiModel);
   const openaiVoiceOptions = buildOptions(OPENAI_TTS_VOICES, openaiVoice);
   const openaiFormatOptions = buildOptions(OPENAI_RESPONSE_FORMATS, openaiResponseFormat);
+  const minimaxVoiceOptions = buildOptions(FAL_MINIMAX_VOICES, falMinimaxVoiceId);
+  const minimaxEmotionOptions = buildOptions(["", ...FAL_MINIMAX_EMOTIONS], falMinimaxEmotion);
   const minimaxLanguageBoostOptions = buildOptions(FAL_MINIMAX_LANGUAGE_BOOST_OPTIONS, falMinimaxLanguageBoost);
   const minimaxOutputFormatOptions = buildOptions(["url", "hex"], falMinimaxOutputFormat);
+  const minimaxAudioFormatOptions = buildOptions(FAL_MINIMAX_AUDIO_FORMATS, falMinimaxAudioFormat);
+  const minimaxAudioSampleRateOptions = buildOptions(
+    FAL_MINIMAX_SAMPLE_RATES.map(value => String(value)),
+    falMinimaxAudioSampleRate
+  );
+  const minimaxAudioChannelOptions = buildOptions(
+    FAL_MINIMAX_AUDIO_CHANNELS.map(value => String(value)),
+    falMinimaxAudioChannel
+  );
+  const minimaxAudioBitrateOptions = buildOptions(
+    FAL_MINIMAX_AUDIO_BITRATES.map(value => String(value)),
+    falMinimaxAudioBitrate
+  );
+  const minimaxNormalizationEnabledOptions = buildOptions(["true", "false"], falMinimaxNormalizationEnabled);
   const falElevenNormalizationOptions = buildOptions(
     FAL_ELEVEN_APPLY_TEXT_NORMALIZATION_OPTIONS,
     falElevenApplyTextNormalization
   );
+  const falElevenVoiceOptions = buildOptions(FAL_ELEVEN_VOICES, falElevenVoice);
+  const falElevenTimestampsOptions = buildOptions(["false", "true"], falElevenTimestamps);
   const minimaxEnglishNormalizationOptions = buildOptions(["false", "true"], falMinimaxEnglishNormalization);
   const ttsAsyncByDefaultOptions = buildOptions(["true", "false"], ttsAsyncByDefault);
 
@@ -608,12 +739,14 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
                 <div class="grid two">
                   <label>
                     Voice ID
-                    <input name="falMinimaxVoiceId" value="${falMinimaxVoiceId}" />
+                    <select name="falMinimaxVoiceId">
+                      ${minimaxVoiceOptions}
+                    </select>
                   </label>
                   <label>
-                    Language boost
-                    <select name="falMinimaxLanguageBoost">
-                      ${minimaxLanguageBoostOptions}
+                    Emotion
+                    <select name="falMinimaxEmotion">
+                      ${minimaxEmotionOptions}
                     </select>
                   </label>
                 </div>
@@ -633,18 +766,92 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
                 </div>
                 <div class="grid two">
                   <label>
+                    Language boost
+                    <select name="falMinimaxLanguageBoost">
+                      ${minimaxLanguageBoostOptions}
+                    </select>
+                  </label>
+                  <label>
                     English normalization
                     <select name="falMinimaxEnglishNormalization">
                       ${minimaxEnglishNormalizationOptions}
                     </select>
                   </label>
+                </div>
+                <div class="grid two">
                   <label>
                     Output format
                     <select name="falMinimaxOutputFormat">
                       ${minimaxOutputFormatOptions}
                     </select>
                   </label>
+                  <label>
+                    Audio format
+                    <select name="falMinimaxAudioFormat">
+                      ${minimaxAudioFormatOptions}
+                    </select>
+                  </label>
                 </div>
+                <div class="grid two">
+                  <label>
+                    Sample rate
+                    <select name="falMinimaxAudioSampleRate">
+                      ${minimaxAudioSampleRateOptions}
+                    </select>
+                  </label>
+                  <label>
+                    Channel
+                    <select name="falMinimaxAudioChannel">
+                      ${minimaxAudioChannelOptions}
+                    </select>
+                  </label>
+                </div>
+                <div class="grid two">
+                  <label>
+                    Bitrate
+                    <select name="falMinimaxAudioBitrate">
+                      ${minimaxAudioBitrateOptions}
+                    </select>
+                  </label>
+                  <label>
+                    Normalization enabled
+                    <select name="falMinimaxNormalizationEnabled">
+                      ${minimaxNormalizationEnabledOptions}
+                    </select>
+                  </label>
+                </div>
+                <div class="grid three">
+                  <label>
+                    Target loudness
+                    <input name="falMinimaxNormalizationTargetLoudness" value="${falMinimaxNormalizationTargetLoudness}" type="number" step="0.1" min="-70" max="-10" />
+                  </label>
+                  <label>
+                    Target range
+                    <input name="falMinimaxNormalizationTargetRange" value="${falMinimaxNormalizationTargetRange}" type="number" step="0.1" min="0" max="20" />
+                  </label>
+                  <label>
+                    Target peak
+                    <input name="falMinimaxNormalizationTargetPeak" value="${falMinimaxNormalizationTargetPeak}" type="number" step="0.1" min="-3" max="0" />
+                  </label>
+                </div>
+                <div class="grid three">
+                  <label>
+                    Voice modify pitch
+                    <input name="falMinimaxVoiceModifyPitch" value="${falMinimaxVoiceModifyPitch}" type="number" step="1" min="-100" max="100" />
+                  </label>
+                  <label>
+                    Voice modify intensity
+                    <input name="falMinimaxVoiceModifyIntensity" value="${falMinimaxVoiceModifyIntensity}" type="number" step="1" min="-100" max="100" />
+                  </label>
+                  <label>
+                    Voice modify timbre
+                    <input name="falMinimaxVoiceModifyTimbre" value="${falMinimaxVoiceModifyTimbre}" type="number" step="1" min="-100" max="100" />
+                  </label>
+                </div>
+                <label>
+                  Pronunciation tone list (comma/newline separated)
+                  <textarea name="falMinimaxPronunciationToneList" placeholder="燕少飞/(yan4)(shao3)(fei1)">${falMinimaxPronunciationToneList}</textarea>
+                </label>
               </div>
 
               <div class="provider-card section stack" data-provider="fal-elevenlabs">
@@ -652,24 +859,15 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
                 <div class="grid two">
                   <label>
                     Voice
-                    <input name="falElevenVoice" value="${falElevenVoice}" list="fal-eleven-voices" />
+                    <select name="falElevenVoice">
+                      ${falElevenVoiceOptions}
+                    </select>
                   </label>
                   <label>
                     Language code (optional)
                     <input name="falElevenLanguageCode" value="${falElevenLanguageCode}" placeholder="en" />
                   </label>
                 </div>
-                <datalist id="fal-eleven-voices">
-                  <option value="Rachel"></option>
-                  <option value="Aria"></option>
-                  <option value="Roger"></option>
-                  <option value="Sarah"></option>
-                  <option value="Laura"></option>
-                  <option value="Charlie"></option>
-                  <option value="George"></option>
-                  <option value="Callum"></option>
-                  <option value="River"></option>
-                </datalist>
                 <div class="grid two">
                   <label>
                     Speed (0.7 - 1.2)
@@ -679,6 +877,14 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
                     Text normalization
                     <select name="falElevenApplyTextNormalization">
                       ${falElevenNormalizationOptions}
+                    </select>
+                  </label>
+                </div>
+                <div class="grid two">
+                  <label>
+                    Return timestamps
+                    <select name="falElevenTimestamps">
+                      ${falElevenTimestampsOptions}
                     </select>
                   </label>
                 </div>

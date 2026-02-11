@@ -78,10 +78,69 @@ export const FAL_MINIMAX_LANGUAGE_BOOST_OPTIONS = [
   "Afrikaans"
 ] as const;
 
+export const FAL_MINIMAX_VOICES = [
+  "Wise_Woman",
+  "Friendly_Person",
+  "Inspirational_girl",
+  "Deep_Voice_Man",
+  "Calm_Woman",
+  "Casual_Guy",
+  "Lively_Girl",
+  "Patient_Man",
+  "Young_Knight",
+  "Determined_Man",
+  "Lovely_Girl",
+  "Decent_Boy",
+  "Imposing_Manner",
+  "Elegant_Man",
+  "Abbess",
+  "Sweet_Girl_2",
+  "Exuberant_Girl"
+] as const;
+
+export const FAL_MINIMAX_EMOTIONS = [
+  "happy",
+  "sad",
+  "angry",
+  "fearful",
+  "disgusted",
+  "surprised",
+  "neutral"
+] as const;
+
+export const FAL_MINIMAX_AUDIO_FORMATS = ["mp3", "pcm", "flac"] as const;
+export const FAL_MINIMAX_SAMPLE_RATES = [8000, 16000, 22050, 24000, 32000, 44100] as const;
+export const FAL_MINIMAX_AUDIO_CHANNELS = [1, 2] as const;
+export const FAL_MINIMAX_AUDIO_BITRATES = [32000, 64000, 128000, 256000] as const;
+
 export const FAL_ELEVEN_APPLY_TEXT_NORMALIZATION_OPTIONS = [
   "auto",
   "on",
   "off"
+] as const;
+
+export const FAL_ELEVEN_VOICES = [
+  "Rachel",
+  "Aria",
+  "Roger",
+  "Sarah",
+  "Laura",
+  "Charlie",
+  "George",
+  "Callum",
+  "River",
+  "Liam",
+  "Charlotte",
+  "Alice",
+  "Matilda",
+  "Will",
+  "Jessica",
+  "Eric",
+  "Chris",
+  "Brian",
+  "Daniel",
+  "Lily",
+  "Bill"
 ] as const;
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
@@ -103,9 +162,22 @@ export type FalMinimaxTtsParams = {
   speed?: number;
   vol?: number;
   pitch?: number;
+  emotion?: (typeof FAL_MINIMAX_EMOTIONS)[number];
   englishNormalization?: boolean;
   languageBoost?: string;
   outputFormat?: "url" | "hex";
+  audioFormat?: (typeof FAL_MINIMAX_AUDIO_FORMATS)[number];
+  audioSampleRate?: (typeof FAL_MINIMAX_SAMPLE_RATES)[number];
+  audioChannel?: (typeof FAL_MINIMAX_AUDIO_CHANNELS)[number];
+  audioBitrate?: (typeof FAL_MINIMAX_AUDIO_BITRATES)[number];
+  normalizationEnabled?: boolean;
+  normalizationTargetLoudness?: number;
+  normalizationTargetRange?: number;
+  normalizationTargetPeak?: number;
+  voiceModifyPitch?: number;
+  voiceModifyIntensity?: number;
+  voiceModifyTimbre?: number;
+  pronunciationToneList?: string[];
 };
 
 export type FalElevenlabsTtsParams = {
@@ -114,6 +186,7 @@ export type FalElevenlabsTtsParams = {
   similarityBoost?: number;
   style?: number;
   speed?: number;
+  timestamps?: boolean;
   languageCode?: string;
   applyTextNormalization?: "auto" | "on" | "off";
 };
@@ -327,6 +400,72 @@ function normalizeFalMinimaxOutputFormat(value: string | undefined): "url" | "he
   return undefined;
 }
 
+function normalizeFalMinimaxEmotion(
+  value: string | undefined
+): (typeof FAL_MINIMAX_EMOTIONS)[number] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_EMOTIONS.includes(value as (typeof FAL_MINIMAX_EMOTIONS)[number])
+    ? value as (typeof FAL_MINIMAX_EMOTIONS)[number]
+    : undefined;
+}
+
+function normalizeFalMinimaxAudioFormat(
+  value: string | undefined
+): (typeof FAL_MINIMAX_AUDIO_FORMATS)[number] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_AUDIO_FORMATS.includes(value as (typeof FAL_MINIMAX_AUDIO_FORMATS)[number])
+    ? value as (typeof FAL_MINIMAX_AUDIO_FORMATS)[number]
+    : undefined;
+}
+
+function normalizeFalMinimaxSampleRate(
+  value: number | undefined
+): (typeof FAL_MINIMAX_SAMPLE_RATES)[number] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_SAMPLE_RATES.includes(value as (typeof FAL_MINIMAX_SAMPLE_RATES)[number])
+    ? value as (typeof FAL_MINIMAX_SAMPLE_RATES)[number]
+    : undefined;
+}
+
+function normalizeFalMinimaxAudioChannel(
+  value: number | undefined
+): (typeof FAL_MINIMAX_AUDIO_CHANNELS)[number] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_AUDIO_CHANNELS.includes(value as (typeof FAL_MINIMAX_AUDIO_CHANNELS)[number])
+    ? value as (typeof FAL_MINIMAX_AUDIO_CHANNELS)[number]
+    : undefined;
+}
+
+function normalizeFalMinimaxAudioBitrate(
+  value: number | undefined
+): (typeof FAL_MINIMAX_AUDIO_BITRATES)[number] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_AUDIO_BITRATES.includes(value as (typeof FAL_MINIMAX_AUDIO_BITRATES)[number])
+    ? value as (typeof FAL_MINIMAX_AUDIO_BITRATES)[number]
+    : undefined;
+}
+
+function parseToneList(value: string | undefined): string[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const items = value
+    .split(/[\n,]/g)
+    .map(part => part.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
 function normalizeFalElevenApplyTextNormalization(
   value: string | undefined
 ): "auto" | "on" | "off" | undefined {
@@ -353,17 +492,49 @@ function buildOpenAiParams(args: CliArgs, fileConfig: FileConfig): OpenAiTtsPara
 function buildFalMinimaxParams(args: CliArgs, fileConfig: FileConfig): FalMinimaxTtsParams {
   const fromFile = fileConfig.tts?.params?.falMinimax;
   return {
-    voiceId: getString(args["fal-minimax-voice-id"]) ?? fromFile?.voiceId ?? "Wise_Woman",
-    speed: getNumber(args["fal-minimax-speed"]) ?? fromFile?.speed ?? 1.0,
-    vol: getNumber(args["fal-minimax-vol"]) ?? fromFile?.vol ?? 1.0,
+    voiceId: getString(args["fal-minimax-voice-id"]) ?? fromFile?.voiceId ?? FAL_MINIMAX_VOICES[0],
+    speed: getNumber(args["fal-minimax-speed"]) ?? fromFile?.speed ?? 1,
+    vol: getNumber(args["fal-minimax-vol"]) ?? fromFile?.vol ?? 1,
     pitch: getNumber(args["fal-minimax-pitch"]) ?? fromFile?.pitch ?? 0,
+    emotion: normalizeFalMinimaxEmotion(getString(args["fal-minimax-emotion"])) ?? fromFile?.emotion,
     englishNormalization: getBoolean(args["fal-minimax-english-normalization"]) ??
       fromFile?.englishNormalization ??
       false,
     languageBoost: getString(args["fal-minimax-language-boost"]) ?? fromFile?.languageBoost ?? "auto",
     outputFormat: normalizeFalMinimaxOutputFormat(getString(args["fal-minimax-output-format"])) ??
       fromFile?.outputFormat ??
-      "url"
+      "url",
+    audioFormat: normalizeFalMinimaxAudioFormat(getString(args["fal-minimax-audio-format"])) ??
+      fromFile?.audioFormat ??
+      "mp3",
+    audioSampleRate: normalizeFalMinimaxSampleRate(getNumber(args["fal-minimax-audio-sample-rate"])) ??
+      fromFile?.audioSampleRate ??
+      32000,
+    audioChannel: normalizeFalMinimaxAudioChannel(getNumber(args["fal-minimax-audio-channel"])) ??
+      fromFile?.audioChannel ??
+      1,
+    audioBitrate: normalizeFalMinimaxAudioBitrate(getNumber(args["fal-minimax-audio-bitrate"])) ??
+      fromFile?.audioBitrate ??
+      128000,
+    normalizationEnabled: getBoolean(args["fal-minimax-normalization-enabled"]) ??
+      fromFile?.normalizationEnabled ??
+      true,
+    normalizationTargetLoudness: getNumber(args["fal-minimax-normalization-target-loudness"]) ??
+      fromFile?.normalizationTargetLoudness ??
+      -18,
+    normalizationTargetRange: getNumber(args["fal-minimax-normalization-target-range"]) ??
+      fromFile?.normalizationTargetRange ??
+      8,
+    normalizationTargetPeak: getNumber(args["fal-minimax-normalization-target-peak"]) ??
+      fromFile?.normalizationTargetPeak ??
+      -0.5,
+    voiceModifyPitch: getNumber(args["fal-minimax-voice-modify-pitch"]) ?? fromFile?.voiceModifyPitch ?? 0,
+    voiceModifyIntensity: getNumber(args["fal-minimax-voice-modify-intensity"]) ??
+      fromFile?.voiceModifyIntensity ??
+      0,
+    voiceModifyTimbre: getNumber(args["fal-minimax-voice-modify-timbre"]) ?? fromFile?.voiceModifyTimbre ?? 0,
+    pronunciationToneList: parseToneList(getString(args["fal-minimax-pronunciation-tone-list"])) ??
+      fromFile?.pronunciationToneList
   };
 }
 
@@ -377,6 +548,7 @@ function buildFalElevenlabsParams(args: CliArgs, fileConfig: FileConfig): FalEle
       0.75,
     style: getNumber(args["fal-elevenlabs-style"]) ?? fromFile?.style ?? 0,
     speed: getNumber(args["fal-elevenlabs-speed"]) ?? fromFile?.speed ?? 1.0,
+    timestamps: getBoolean(args["fal-elevenlabs-timestamps"]) ?? fromFile?.timestamps ?? false,
     languageCode: getString(args["fal-elevenlabs-language-code"]) ?? fromFile?.languageCode,
     applyTextNormalization: normalizeFalElevenApplyTextNormalization(
       getString(args["fal-elevenlabs-apply-text-normalization"])
@@ -707,19 +879,50 @@ async function speakFalMinimax(text: string, config: RuntimeConfig, apiKey: stri
 
   const params = config.tts.params.falMinimax;
   const outputFormat = params.outputFormat ?? "url";
+  const audioFormat = params.audioFormat ?? "mp3";
+  const voicePitch = Math.round(clampNumber(params.pitch ?? 0, -12, 12));
+  const voiceModifyPitch = Math.round(clampNumber(params.voiceModifyPitch ?? 0, -100, 100));
+  const voiceModifyIntensity = Math.round(clampNumber(params.voiceModifyIntensity ?? 0, -100, 100));
+  const voiceModifyTimbre = Math.round(clampNumber(params.voiceModifyTimbre ?? 0, -100, 100));
+
   const body: Record<string, unknown> = {
     prompt: trimmed,
     output_format: outputFormat,
     voice_setting: {
-      speed: params.speed ?? 1,
-      vol: params.vol ?? 1,
-      voice_id: params.voiceId ?? "Wise_Woman",
-      pitch: params.pitch ?? 0,
+      speed: clampNumber(params.speed ?? 1, 0.5, 2.0),
+      vol: clampNumber(params.vol ?? 1, 0.01, 10),
+      voice_id: params.voiceId ?? FAL_MINIMAX_VOICES[0],
+      pitch: voicePitch,
       english_normalization: params.englishNormalization ?? false
+    },
+    audio_setting: {
+      format: audioFormat,
+      sample_rate: params.audioSampleRate ?? 32000,
+      channel: params.audioChannel ?? 1,
+      bitrate: params.audioBitrate ?? 128000
+    },
+    normalization_setting: {
+      enabled: params.normalizationEnabled ?? true,
+      target_loudness: clampNumber(params.normalizationTargetLoudness ?? -18, -70, -10),
+      target_range: clampNumber(params.normalizationTargetRange ?? 8, 0, 20),
+      target_peak: clampNumber(params.normalizationTargetPeak ?? -0.5, -3, 0)
+    },
+    voice_modify: {
+      pitch: voiceModifyPitch,
+      intensity: voiceModifyIntensity,
+      timbre: voiceModifyTimbre
     }
   };
+  if (params.emotion) {
+    (body.voice_setting as Record<string, unknown>).emotion = params.emotion;
+  }
   if (params.languageBoost) {
     body.language_boost = params.languageBoost;
+  }
+  if (params.pronunciationToneList && params.pronunciationToneList.length > 0) {
+    body.pronunciation_dict = {
+      tone_list: params.pronunciationToneList
+    };
   }
 
   const response = await fetchWithTimeout(
@@ -747,7 +950,7 @@ async function speakFalMinimax(text: string, config: RuntimeConfig, apiKey: stri
       throw new Error("FAL MiniMax response did not contain hex audio data");
     }
     const data = Buffer.from(hex, "hex");
-    await playAudioBuffer(data, "mp3");
+    await playAudioBuffer(data, audioFormat);
     return;
   }
 
@@ -772,6 +975,7 @@ async function speakFalElevenlabs(text: string, config: RuntimeConfig, apiKey: s
     similarity_boost: clampNumber(params.similarityBoost ?? 0.75, 0, 1),
     style: clampNumber(params.style ?? 0, 0, 1),
     speed: clampNumber(params.speed ?? 1, 0.7, 1.2),
+    timestamps: params.timestamps ?? false,
     apply_text_normalization: params.applyTextNormalization ?? "auto"
   };
   if (params.languageCode) {
@@ -907,9 +1111,25 @@ export async function saveRuntimeConfig(configPath: string, runtime: RuntimeConf
     speed: runtime.tts.params.falMinimax.speed,
     vol: runtime.tts.params.falMinimax.vol,
     pitch: runtime.tts.params.falMinimax.pitch,
+    emotion: runtime.tts.params.falMinimax.emotion,
     englishNormalization: runtime.tts.params.falMinimax.englishNormalization,
     languageBoost: runtime.tts.params.falMinimax.languageBoost,
-    outputFormat: runtime.tts.params.falMinimax.outputFormat
+    outputFormat: runtime.tts.params.falMinimax.outputFormat,
+    audioFormat: runtime.tts.params.falMinimax.audioFormat,
+    audioSampleRate: runtime.tts.params.falMinimax.audioSampleRate,
+    audioChannel: runtime.tts.params.falMinimax.audioChannel,
+    audioBitrate: runtime.tts.params.falMinimax.audioBitrate,
+    normalizationEnabled: runtime.tts.params.falMinimax.normalizationEnabled,
+    normalizationTargetLoudness: runtime.tts.params.falMinimax.normalizationTargetLoudness,
+    normalizationTargetRange: runtime.tts.params.falMinimax.normalizationTargetRange,
+    normalizationTargetPeak: runtime.tts.params.falMinimax.normalizationTargetPeak,
+    voiceModifyPitch: runtime.tts.params.falMinimax.voiceModifyPitch,
+    voiceModifyIntensity: runtime.tts.params.falMinimax.voiceModifyIntensity,
+    voiceModifyTimbre: runtime.tts.params.falMinimax.voiceModifyTimbre,
+    pronunciationToneList: runtime.tts.params.falMinimax.pronunciationToneList &&
+      runtime.tts.params.falMinimax.pronunciationToneList.length > 0
+      ? runtime.tts.params.falMinimax.pronunciationToneList
+      : undefined
   });
 
   const falElevenlabsParams = withDefinedProps({
@@ -918,6 +1138,7 @@ export async function saveRuntimeConfig(configPath: string, runtime: RuntimeConf
     similarityBoost: runtime.tts.params.falElevenlabs.similarityBoost,
     style: runtime.tts.params.falElevenlabs.style,
     speed: runtime.tts.params.falElevenlabs.speed,
+    timestamps: runtime.tts.params.falElevenlabs.timestamps,
     languageCode: runtime.tts.params.falElevenlabs.languageCode,
     applyTextNormalization: runtime.tts.params.falElevenlabs.applyTextNormalization
   });
