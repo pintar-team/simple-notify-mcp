@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createRequire } from "node:module";
 import process from "node:process";
 import {
   downloadTelegramFileById,
@@ -23,7 +24,20 @@ import {
 } from "./runtime.js";
 import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
 
-const VERSION = "0.1.8";
+function readVersionFromPackageJson(): string {
+  try {
+    const localRequire = createRequire(import.meta.url);
+    const pkg = localRequire("../package.json") as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version.trim() !== "") {
+      return pkg.version.trim();
+    }
+  } catch {
+    // Fallback keeps status endpoint functional even in unusual packaging environments.
+  }
+  return "0.0.0";
+}
+
+const VERSION = readVersionFromPackageJson();
 const SERVER_NAME = "simple_notify";
 const SERVER_TITLE = "Simple Notify MCP";
 

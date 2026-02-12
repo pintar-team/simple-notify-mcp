@@ -554,7 +554,7 @@ export function buildSetupPage(configPath: string, token: string, runtime: Runti
       <div class="card">
         <div class="meta-row">
           <div class="meta-item">Config path: <code>${escapeHtml(configPath)}</code></div>
-          <div class="meta-item">
+          <div id="missing-meta" class="meta-item">
             Missing config:
             <div id="missing-list" class="missing-list"></div>
           </div>
@@ -952,6 +952,7 @@ export function buildSetupPage(configPath: string, token: string, runtime: Runti
       const form = document.getElementById("setup-form");
       const resultNode = document.getElementById("result");
       const missingListNode = document.getElementById("missing-list");
+      const missingMetaNode = document.getElementById("missing-meta");
       const nextHintNode = document.getElementById("next-hint");
       const providerSelect = document.getElementById("provider");
       const tabs = Array.from(document.querySelectorAll(".tab"));
@@ -1012,11 +1013,13 @@ export function buildSetupPage(configPath: string, token: string, runtime: Runti
       function renderMissingChips() {
         missingListNode.innerHTML = "";
         if (!missingConfig.length) {
-          const span = document.createElement("span");
-          span.className = "missing-empty";
-          span.textContent = "none";
-          missingListNode.appendChild(span);
+          if (missingMetaNode) {
+            missingMetaNode.hidden = true;
+          }
           return;
+        }
+        if (missingMetaNode) {
+          missingMetaNode.hidden = false;
         }
 
         for (const field of missingConfig) {
