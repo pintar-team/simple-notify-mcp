@@ -1,6 +1,6 @@
 # simple-notify-mcp
 
-KISS MCP server for spoken and Telegram notifications.
+Model Context Protocol (MCP) server for Codex and Claude Code with text-to-speech (TTS) and Telegram notifications.
 
 ## Tools
 

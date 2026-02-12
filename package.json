@@ -1,7 +1,7 @@
 {
   "name": "simple-notify-mcp",
-  "version": "0.1.7",
-  "description": "KISS MCP server for TTS + Telegram notifications",
+  "version": "0.1.8",
+  "description": "Model Context Protocol (MCP) server for text-to-speech and Telegram notifications in Codex and Claude Code.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/pintar-team/simple-notify-mcp.git"
@@ -12,12 +12,21 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "codex",
     "claude",
     "claude-code",
+    "ai-agent",
     "tts",
+    "text-to-speech",
     "telegram",
-    "notification"
+    "telegram-bot",
+    "notifications",
+    "openai",
+    "fal-ai",
+    "minimax",
+    "elevenlabs"
   ],
   "type": "module",
   "files": [
