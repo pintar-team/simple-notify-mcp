@@ -40,7 +40,7 @@
     "lint": "eslint .",
     "prepack": "npm run lint && npm run build",
     "self-test": "npm run build && node build/self-test.js",
-    "test": "npm run build && node --test build/telegram-format.test.js",
+    "test": "npm run build && node --test build/*.test.js",
     "start": "npm run build && node build/index.js"
   },
   "dependencies": {
