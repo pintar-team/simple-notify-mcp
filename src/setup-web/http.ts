@@ -4,6 +4,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getString } from "../runtime.js";
 import type { SubmittedSetupConfig } from "./types.js";
 
+export class SetupWebRequestError extends Error {
+  readonly statusCode: number;
+
+  constructor(statusCode: number, message: string) {
+    super(message);
+    this.name = "SetupWebRequestError";
+    this.statusCode = statusCode;
+  }
+}
+
 export async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -12,7 +22,7 @@ export async function readRequestBody(req: IncomingMessage): Promise<string> {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
     if (total > 1_000_000) {
-      throw new Error("Request body too large");
+      throw new SetupWebRequestError(413, "Request body too large");
     }
     chunks.push(buffer);
   }
@@ -22,7 +32,11 @@ export async function readRequestBody(req: IncomingMessage): Promise<string> {
 
 export function parseBodyByContentType(contentType: string | undefined, rawBody: string): SubmittedSetupConfig {
   if (contentType?.includes("application/json")) {
-    return JSON.parse(rawBody) as SubmittedSetupConfig;
+    try {
+      return JSON.parse(rawBody) as SubmittedSetupConfig;
+    } catch {
+      throw new SetupWebRequestError(400, "Invalid JSON body");
+    }
   }
 
   const params = new URLSearchParams(rawBody);

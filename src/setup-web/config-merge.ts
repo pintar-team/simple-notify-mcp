@@ -1,6 +1,10 @@
 import {
+  FAL_MINIMAX_AUDIO_BITRATES,
+  FAL_MINIMAX_AUDIO_CHANNELS,
+  FAL_MINIMAX_AUDIO_FORMATS,
   FAL_ELEVEN_APPLY_TEXT_NORMALIZATION_OPTIONS,
   FAL_MINIMAX_EMOTIONS,
+  FAL_MINIMAX_SAMPLE_RATES,
   OPENAI_RESPONSE_FORMATS,
   getString,
   type RuntimeConfig,
@@ -55,6 +59,50 @@ function normalizeFalMinimaxOutputFormat(value: string | undefined): "url" | "he
     return value;
   }
   return undefined;
+}
+
+function normalizeFalMinimaxAudioFormat(
+  value: string | undefined
+): RuntimeConfig["tts"]["params"]["falMinimax"]["audioFormat"] {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_AUDIO_FORMATS.includes(value as (typeof FAL_MINIMAX_AUDIO_FORMATS)[number])
+    ? value as RuntimeConfig["tts"]["params"]["falMinimax"]["audioFormat"]
+    : undefined;
+}
+
+function normalizeFalMinimaxSampleRate(
+  value: number | undefined
+): RuntimeConfig["tts"]["params"]["falMinimax"]["audioSampleRate"] {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_SAMPLE_RATES.includes(value as (typeof FAL_MINIMAX_SAMPLE_RATES)[number])
+    ? value as RuntimeConfig["tts"]["params"]["falMinimax"]["audioSampleRate"]
+    : undefined;
+}
+
+function normalizeFalMinimaxAudioChannel(
+  value: number | undefined
+): RuntimeConfig["tts"]["params"]["falMinimax"]["audioChannel"] {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_AUDIO_CHANNELS.includes(value as (typeof FAL_MINIMAX_AUDIO_CHANNELS)[number])
+    ? value as RuntimeConfig["tts"]["params"]["falMinimax"]["audioChannel"]
+    : undefined;
+}
+
+function normalizeFalMinimaxAudioBitrate(
+  value: number | undefined
+): RuntimeConfig["tts"]["params"]["falMinimax"]["audioBitrate"] {
+  if (!value) {
+    return undefined;
+  }
+  return FAL_MINIMAX_AUDIO_BITRATES.includes(value as (typeof FAL_MINIMAX_AUDIO_BITRATES)[number])
+    ? value as RuntimeConfig["tts"]["params"]["falMinimax"]["audioBitrate"]
+    : undefined;
 }
 
 function normalizeFalMinimaxEmotion(
@@ -119,12 +167,19 @@ export function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSe
     current.tts.params.falMinimax.languageBoost;
   const falMinimaxOutputFormat = normalizeFalMinimaxOutputFormat(getString(incoming.falMinimaxOutputFormat)) ??
     current.tts.params.falMinimax.outputFormat;
-  const falMinimaxAudioFormat = getString(incoming.falMinimaxAudioFormat) ?? current.tts.params.falMinimax.audioFormat;
-  const falMinimaxAudioSampleRate = parseNumberString(getString(incoming.falMinimaxAudioSampleRate)) ??
+  const falMinimaxAudioFormat = normalizeFalMinimaxAudioFormat(getString(incoming.falMinimaxAudioFormat)) ??
+    current.tts.params.falMinimax.audioFormat;
+  const falMinimaxAudioSampleRate = normalizeFalMinimaxSampleRate(
+    parseNumberString(getString(incoming.falMinimaxAudioSampleRate))
+  ) ??
     current.tts.params.falMinimax.audioSampleRate;
-  const falMinimaxAudioChannel = parseNumberString(getString(incoming.falMinimaxAudioChannel)) ??
+  const falMinimaxAudioChannel = normalizeFalMinimaxAudioChannel(
+    parseNumberString(getString(incoming.falMinimaxAudioChannel))
+  ) ??
     current.tts.params.falMinimax.audioChannel;
-  const falMinimaxAudioBitrate = parseNumberString(getString(incoming.falMinimaxAudioBitrate)) ??
+  const falMinimaxAudioBitrate = normalizeFalMinimaxAudioBitrate(
+    parseNumberString(getString(incoming.falMinimaxAudioBitrate))
+  ) ??
     current.tts.params.falMinimax.audioBitrate;
   const falMinimaxNormalizationEnabled = parseBooleanString(getString(incoming.falMinimaxNormalizationEnabled)) ??
     current.tts.params.falMinimax.normalizationEnabled;
@@ -196,10 +251,10 @@ export function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSe
           englishNormalization: falMinimaxEnglishNormalization,
           languageBoost: falMinimaxLanguageBoost,
           outputFormat: falMinimaxOutputFormat,
-          audioFormat: falMinimaxAudioFormat as RuntimeConfig["tts"]["params"]["falMinimax"]["audioFormat"],
-          audioSampleRate: falMinimaxAudioSampleRate as RuntimeConfig["tts"]["params"]["falMinimax"]["audioSampleRate"],
-          audioChannel: falMinimaxAudioChannel as RuntimeConfig["tts"]["params"]["falMinimax"]["audioChannel"],
-          audioBitrate: falMinimaxAudioBitrate as RuntimeConfig["tts"]["params"]["falMinimax"]["audioBitrate"],
+          audioFormat: falMinimaxAudioFormat,
+          audioSampleRate: falMinimaxAudioSampleRate,
+          audioChannel: falMinimaxAudioChannel,
+          audioBitrate: falMinimaxAudioBitrate,
           normalizationEnabled: falMinimaxNormalizationEnabled,
           normalizationTargetLoudness: falMinimaxNormalizationTargetLoudness,
           normalizationTargetRange: falMinimaxNormalizationTargetRange,

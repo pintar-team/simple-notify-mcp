@@ -45,6 +45,22 @@ test("mergeRuntimeConfig keeps secrets unless clear flags are enabled", () => {
   assert.equal(cleared.keys.telegram?.botToken, undefined);
 });
 
+test("mergeRuntimeConfig ignores invalid fal minimax enum-like values", () => {
+  const current = makeRuntime();
+
+  const merged = mergeRuntimeConfig(current, {
+    falMinimaxAudioFormat: "wav",
+    falMinimaxAudioSampleRate: "12345",
+    falMinimaxAudioChannel: "3",
+    falMinimaxAudioBitrate: "64001"
+  });
+
+  assert.equal(merged.tts.params.falMinimax.audioFormat, current.tts.params.falMinimax.audioFormat);
+  assert.equal(merged.tts.params.falMinimax.audioSampleRate, current.tts.params.falMinimax.audioSampleRate);
+  assert.equal(merged.tts.params.falMinimax.audioChannel, current.tts.params.falMinimax.audioChannel);
+  assert.equal(merged.tts.params.falMinimax.audioBitrate, current.tts.params.falMinimax.audioBitrate);
+});
+
 test("parseRequestedTests normalizes and deduplicates values", () => {
   const parsed = parseRequestedTests(" tts, TELEGRAM, tts, invalid ");
   assert.deepEqual(parsed, ["tts", "telegram"]);
@@ -107,6 +123,19 @@ test("setup web server enforces token auth and accepts config updates from json 
   const statusJson = await statusResp.json();
   assert.equal(statusJson.ok, true);
   assert.equal(statusJson.configPath, configPath);
+
+  const invalidJsonSave = await fetch(`${baseUrl}api/config`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Setup-Token": token
+    },
+    body: "{\"provider\":"
+  });
+  assert.equal(invalidJsonSave.status, 400);
+  const invalidJsonBody = await invalidJsonSave.json();
+  assert.equal(invalidJsonBody.ok, false);
+  assert.equal(invalidJsonBody.error, "Invalid JSON body");
 
   const jsonSave = await fetch(`${baseUrl}api/config`, {
     method: "POST",

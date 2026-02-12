@@ -9,6 +9,7 @@ import {
   isValidSetupToken,
   parseBodyByContentType,
   readRequestBody,
+  SetupWebRequestError,
   writeNoStoreHeaders
 } from "./setup-web/http.js";
 import { listenOnFirstAvailablePort, normalizeHost, parsePort } from "./setup-web/net.js";
@@ -115,10 +116,12 @@ export async function startSetupWebServer(
       writeNoStoreHeaders(res, 404, "application/json");
       res.end(JSON.stringify({ ok: false, error: "Not found" }));
     } catch (err) {
+      const isClientError = err instanceof SetupWebRequestError;
+      const statusCode = isClientError ? err.statusCode : 500;
       const message = err instanceof Error ? err.message : String(err);
       try {
         if (!res.headersSent) {
-          writeNoStoreHeaders(res, 500, "application/json");
+          writeNoStoreHeaders(res, statusCode, "application/json");
         }
         if (!res.writableEnded) {
           res.end(JSON.stringify({ ok: false, error: message }));
