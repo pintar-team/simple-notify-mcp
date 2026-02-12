@@ -35,9 +35,10 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run typecheck && tsc",
     "dev": "npm run build && node build/index.js",
     "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
     "prepack": "npm run lint && npm run build",
     "self-test": "npm run build && node build/self-test.js",
     "test": "npm run build && node --test build/*.test.js",
