@@ -84,6 +84,86 @@ claude mcp add --transport stdio \
   --enable-setup-web
 ```
 
+## How To Use
+
+Think of `simple-notify-mcp` as your "agent communication layer":
+- voice message when work is done (`tts_say`)
+- Telegram ping when work is done or while work is in progress (`telegram_notify`)
+- optional Telegram inbox reads (`telegram_read_incoming`, `telegram_read_media`)
+
+### Typical flow
+
+1) Start with setup web enabled (recommended mode above).
+
+2) Ask your agent for setup link:
+- "Run `simple_notify_status` and send me `setupWeb.url`."
+
+3) Open the link, set keys/provider/chat id, then click Save.
+   In some clients, you may need to restart the agent process after adding keys so all tools become available.
+
+4) After that, ask your agent to always:
+- speak on completion
+- send Telegram on completion
+- send Telegram updates during long tasks
+
+### What to ask your agent (examples)
+
+- Setup:
+  - "Please configure simple-notify and give me the setup link."
+- Completion behavior:
+  - "When you finish a task, call TTS and Telegram notify."
+- Long task behavior:
+  - "If task is long, notify me on progress milestones and before escalation requests."
+- Read incoming Telegram:
+  - "If notify result says unread incoming, read it and continue."
+
+### TTS/Notification style tips (easy and practical)
+
+You can tune:
+- language (EN/RU/etc)
+- tone (calm/energetic/formal/casual)
+- emotion (neutral/cheerful/serious)
+- slang level
+- pacing
+
+Examples:
+- EN calm:
+  - `Task complete. Build passed. I left a short summary.`
+- EN upbeat:
+  - `Done. All checks are green.`
+- RU neutral:
+  - `Готово. Проверки прошли успешно.`
+- RU casual:
+  - `Запилил фичу, всё пашет, тесты зеленые.`
+
+
+## Copy-Paste For AGENTS.md / CLAUDE.md
+
+The easiest way to tune agent behavior is to add explicit tool-usage instructions to your agent config.
+You can copy-paste this block and adjust it as needed:
+
+```txt
+If user uses simple-notify-mcp:
+
+1) Setup flow
+- Call simple_notify_status.
+- If setupWeb.running=true, return setupWeb.url to user.
+- If setup web is disabled, tell user to run MCP with --enable-setup-web.
+
+2) Completion flow
+- On task completion, call tts_say with a short completion message.
+- Then call telegram_notify with a short completion summary.
+- If telegram_notify returns hasUnreadIncoming=true, optionally call telegram_read_incoming.
+
+3) Long-task flow
+- For long tasks, send milestone progress via telegram_notify.
+- Send a notify before asking user for escalation/approval.
+- Keep updates useful (no spam).
+
+4) Safety
+- Never include secrets/tokens in TTS or Telegram messages.
+```
+
 ## Configuration Schema
 
 Config file path (default):
