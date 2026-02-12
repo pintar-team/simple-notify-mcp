@@ -21,7 +21,7 @@ import {
 } from "./runtime.js";
 import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
 
-const VERSION = "0.1.5";
+const VERSION = "0.1.6";
 const SERVER_NAME = "simple_notify";
 const SERVER_TITLE = "Simple Notify MCP";
 
@@ -512,6 +512,77 @@ if (setupWebEnabled) {
 }
 
 const transport = new StdioServerTransport();
+const parentPidAtLaunch = process.ppid;
+let shutdownStarted = false;
+let parentWatchdogTimer: NodeJS.Timeout | null = null;
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 1) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === "EPERM";
+  }
+}
+
+const onStdinClosed = (): void => {
+  void shutdown("stdin_closed");
+};
+
+function startParentWatchdog(): void {
+  if (parentPidAtLaunch <= 1) {
+    return;
+  }
+  parentWatchdogTimer = setInterval(() => {
+    const parentPidNow = process.ppid;
+    if (parentPidNow !== parentPidAtLaunch || !isProcessAlive(parentPidAtLaunch)) {
+      void shutdown("parent_exited");
+    }
+  }, 4_000);
+  parentWatchdogTimer.unref();
+}
+
+const shutdown = async (reason: string): Promise<void> => {
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+  console.error(`[simple-notify-mcp] shutting down (${reason})`);
+  process.stdin.off("end", onStdinClosed);
+  process.stdin.off("close", onStdinClosed);
+  if (parentWatchdogTimer) {
+    clearInterval(parentWatchdogTimer);
+    parentWatchdogTimer = null;
+  }
+  try {
+    await server.close();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[simple-notify-mcp] server close error: ${message}`);
+  }
+  if (setupWeb) {
+    try {
+      await setupWeb.close();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[simple-notify-mcp] setup web close error: ${message}`);
+    }
+  }
+  process.exit(0);
+};
+
+transport.onclose = () => {
+  void shutdown("transport_closed");
+};
+
+process.stdin.on("end", onStdinClosed);
+process.stdin.on("close", onStdinClosed);
+startParentWatchdog();
+
 await server.connect(transport);
 
 const enabled = [
@@ -524,22 +595,10 @@ const enabled = [
 
 console.error(`[simple-notify-mcp] ready; tools: ${enabled}`);
 
-const shutdown = async (): Promise<void> => {
-  if (setupWeb) {
-    try {
-      await setupWeb.close();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[simple-notify-mcp] setup web close error: ${message}`);
-    }
-  }
-  process.exit(0);
-};
-
 process.once("SIGINT", () => {
-  void shutdown();
+  void shutdown("sigint");
 });
 
 process.once("SIGTERM", () => {
-  void shutdown();
+  void shutdown("sigterm");
 });
