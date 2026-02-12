@@ -1757,7 +1757,12 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
           }
           setResult(messages.join(" | "), level);
         } catch (error) {
-          setResult(String(error), "err");
+          const message = String(error);
+          if (message.toLowerCase().includes("failed to fetch")) {
+            setResult("Failed to reach setup server. It may have restarted; ask your agent for a fresh setupWeb.url.", "err");
+          } else {
+            setResult(message, "err");
+          }
         } finally {
           setSubmitterSavingState(submitter, false);
           setBusy(false);
@@ -1857,13 +1862,35 @@ export async function startSetupWebServer(
       res.end(JSON.stringify({ ok: false, error: "Not found" }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: false, error: message }));
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+        }
+        if (!res.writableEnded) {
+          res.end(JSON.stringify({ ok: false, error: message }));
+        }
+      } catch (writeErr) {
+        const writeMessage = writeErr instanceof Error ? writeErr.message : String(writeErr);
+        console.error(`[simple-notify-mcp] setup web error response failed: ${writeMessage}; original: ${message}`);
+      }
     }
   };
 
   server = createServer((req, res) => {
-    void handleRequest(req, res);
+    void handleRequest(req, res).catch(err => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[simple-notify-mcp] setup web unhandled request error: ${message}`);
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+        }
+        if (!res.writableEnded) {
+          res.end(JSON.stringify({ ok: false, error: "Internal setup server error" }));
+        }
+      } catch {
+        // Ignore secondary write errors on broken sockets.
+      }
+    });
   });
 
   port = await listenOnFirstAvailablePort(server, host, requestedPort);
