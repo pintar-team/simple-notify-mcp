@@ -1,5 +1,8 @@
 # simple-notify-mcp
 
+[![npm version](https://img.shields.io/npm/v/simple-notify-mcp)](https://www.npmjs.com/package/simple-notify-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/simple-notify-mcp)](https://www.npmjs.com/package/simple-notify-mcp)
+
 Model Context Protocol (MCP) server for Codex and Claude Code with text-to-speech (TTS) and Telegram notifications.
 
 ## Tools
