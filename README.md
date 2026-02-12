@@ -9,9 +9,18 @@ Model Context Protocol (MCP) server for Codex and Claude Code with text-to-speec
 
 - `simple_notify_status`: always available; returns capabilities, missing config, and setup-web state.
 - `tts_say`: text-only input; async by default, uses configured provider (`openai`, `fal-minimax`, `fal-elevenlabs`) with macOS `say` fallback.
-- `telegram_notify`: available when Telegram bot token + chat id are configured; returns `hasUnreadIncoming` from a non-advancing unread peek.
+- `telegram_notify`: available when Telegram bot token + chat id are configured; supports `parse_mode` (`plain`, `markdown`, `html`) and returns `hasUnreadIncoming` from a non-advancing unread peek.
+- `telegram_send_photo`: available when Telegram bot token + chat id are configured; sends local image files (`jpg`, `jpeg`, `png`, `webp`, `gif`, `bmp`) with optional caption and `parse_mode`.
 - `telegram_read_incoming`: available when Telegram bot token + chat id are configured; reads incoming updates for configured chat.
 - `telegram_read_media`: available when Telegram bot token + chat id are configured; reads image updates and can return MCP image content blocks.
+
+Telegram formatting quick examples:
+- `telegram_notify({ "text": "**Build done**. [Diff](https://example.com)", "parse_mode": "markdown" })`
+- `telegram_send_photo({ "filePath": "/tmp/plan.png", "caption": "<b>Plan snapshot</b>", "parse_mode": "html" })`
+- Markdown mode supports a safe subset: `**bold**`, `*italic*`, `_italic_`, `~~strike~~`, `` `code` ``, `[text](https://url)`, and `#` headings.
+- HTML mode is validated and allows only Telegram-safe tags; links must be `https://` or `http://`.
+- If Markdown entity parsing fails on Telegram side, the server retries once with plain text for reliability.
+- Telegram limits are enforced before send (message: 4096 chars, caption: 1024 chars).
 
 ## Install (npx)
 

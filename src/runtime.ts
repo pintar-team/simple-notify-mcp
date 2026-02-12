@@ -206,6 +206,9 @@ export type TelegramConfig = {
   chatId?: string;
 };
 
+export const TELEGRAM_PARSE_MODES = ["plain", "markdown", "html"] as const;
+export type TelegramParseMode = (typeof TELEGRAM_PARSE_MODES)[number];
+
 export type KeysConfig = {
   openai?: {
     apiKey?: string;
@@ -1083,31 +1086,514 @@ export async function testTtsProvider(text: string, runtime: RuntimeConfig): Pro
   });
 }
 
-export async function sendTelegram(text: string, runtime: RuntimeConfig): Promise<void> {
+export type TelegramSendOptions = {
+  parseMode?: TelegramParseMode;
+};
+
+export type TelegramSendPhotoOptions = {
+  caption?: string;
+  parseMode?: TelegramParseMode;
+};
+
+type PreparedTelegramText = {
+  text: string;
+  visibleText: string;
+  telegramParseMode?: "HTML";
+  normalizedSource: string;
+};
+
+class TelegramApiRequestError extends Error {
+  readonly action: string;
+  readonly status: number;
+  readonly description?: string;
+  readonly errorCode?: number;
+
+  constructor(action: string, status: number, payloadRaw: string, description?: string, errorCode?: number) {
+    const suffix = description ? `: ${description}` : `: ${payloadRaw}`;
+    super(`Telegram ${action} error (${status})${suffix}`);
+    this.name = "TelegramApiRequestError";
+    this.action = action;
+    this.status = status;
+    this.description = description;
+    this.errorCode = errorCode;
+  }
+}
+
+const TELEGRAM_TEXT_MAX_CHARS = 4096;
+const TELEGRAM_CAPTION_MAX_CHARS = 1024;
+const TELEGRAM_ALLOWED_HTML_TAGS = new Set<string>([
+  "a",
+  "b",
+  "blockquote",
+  "code",
+  "del",
+  "em",
+  "i",
+  "ins",
+  "pre",
+  "s",
+  "spoiler",
+  "strike",
+  "strong",
+  "tg-spoiler",
+  "u"
+]);
+
+function normalizeTelegramParseMode(value: TelegramParseMode | undefined): TelegramParseMode {
+  if (value === "markdown" || value === "html") {
+    return value;
+  }
+  return "plain";
+}
+
+function normalizeTelegramSourceText(text: string): string {
+  return text.replaceAll("\r\n", "\n");
+}
+
+function escapeTelegramHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;");
+}
+
+function escapeTelegramHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function decodeLimitedHtmlEntities(value: string): string {
+  return value
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'");
+}
+
+function stripTelegramHtmlTags(value: string): string {
+  return value.replace(/<[^>]+>/g, "");
+}
+
+function enforceTelegramTextLength(visibleText: string, maxChars: number, label: "message" | "caption"): void {
+  const length = visibleText.length;
+  if (length > maxChars) {
+    throw new Error(`Telegram ${label} too long (${length} chars; max ${maxChars}).`);
+  }
+}
+
+function buildUniqueToken(prefix: string, index: number, source: string): string {
+  let token = `@@SNMCP${prefix}${index}@@`;
+  let counter = 0;
+  while (source.includes(token)) {
+    counter += 1;
+    token = `@@SNMCP${prefix}${index}_${counter}@@`;
+  }
+  return token;
+}
+
+function extractInlineCodeSpans(
+  escapedInput: string
+): { text: string; replacements: Map<string, string> } {
+  const replacements = new Map<string, string>();
+  let output = "";
+  let index = 0;
+  let tokenIndex = 0;
+
+  while (index < escapedInput.length) {
+    if (escapedInput[index] !== "`") {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    let closeIndex = index + 1;
+    while (closeIndex < escapedInput.length && escapedInput[closeIndex] !== "`" && escapedInput[closeIndex] !== "\n") {
+      closeIndex += 1;
+    }
+
+    if (closeIndex >= escapedInput.length || escapedInput[closeIndex] !== "`") {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    const inner = escapedInput.slice(index + 1, closeIndex);
+    if (inner.length === 0) {
+      output += "``";
+      index = closeIndex + 1;
+      continue;
+    }
+
+    const token = buildUniqueToken("CODE", tokenIndex, escapedInput);
+    tokenIndex += 1;
+    replacements.set(token, `<code>${inner}</code>`);
+    output += token;
+    index = closeIndex + 1;
+  }
+
+  return { text: output, replacements };
+}
+
+function replaceMarkdownLinks(
+  escapedInput: string
+): { text: string; replacements: Map<string, string> } {
+  const replacements = new Map<string, string>();
+  let output = "";
+  let index = 0;
+  let tokenIndex = 0;
+
+  while (index < escapedInput.length) {
+    if (escapedInput[index] !== "[") {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    const closeBracket = escapedInput.indexOf("]", index + 1);
+    if (closeBracket === -1) {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    const label = escapedInput.slice(index + 1, closeBracket);
+    const openParen = closeBracket + 1;
+    if (label.length === 0 || label.includes("\n") || escapedInput[openParen] !== "(") {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    const closeParen = escapedInput.indexOf(")", openParen + 1);
+    if (closeParen === -1) {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    const url = escapedInput.slice(openParen + 1, closeParen);
+    if (url.length === 0 || /\s/.test(url) || !/^https?:\/\/[^\s<>"']+$/i.test(url)) {
+      output += escapedInput[index];
+      index += 1;
+      continue;
+    }
+
+    const token = buildUniqueToken("LINK", tokenIndex, escapedInput);
+    tokenIndex += 1;
+    replacements.set(token, `<a href="${escapeTelegramHtmlAttribute(url)}">${label}</a>`);
+    output += token;
+    index = closeParen + 1;
+  }
+
+  return { text: output, replacements };
+}
+
+function restorePlaceholderTokens(value: string, replacements: Map<string, string>): string {
+  let output = value;
+  for (const [token, replacement] of replacements.entries()) {
+    output = output.replaceAll(token, replacement);
+  }
+  return output;
+}
+
+function applyMarkdownSubsetFormatting(value: string): string {
+  let output = value;
+  output = output.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, "<b>$1</b>");
+  output = output.replace(/~~([^~\n][^~\n]*?)~~/g, "<s>$1</s>");
+  output = output.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, "<i>$1</i>");
+  output = output.replace(/(?<!_)_([^_\n]+?)_(?!_)/g, "<i>$1</i>");
+
+  output = output
+    .split("\n")
+    .map(line => {
+      const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+      return headingMatch ? `<b>${headingMatch[1]}</b>` : line;
+    })
+    .join("\n");
+
+  return output;
+}
+
+export function convertTelegramMarkdownToHtml(markdownText: string): string {
+  const normalized = normalizeTelegramSourceText(markdownText);
+  const escaped = escapeTelegramHtml(normalized);
+  const withCode = extractInlineCodeSpans(escaped);
+  const withLinks = replaceMarkdownLinks(withCode.text);
+  const formatted = applyMarkdownSubsetFormatting(withLinks.text);
+  const restoredLinks = restorePlaceholderTokens(formatted, withLinks.replacements);
+  return restorePlaceholderTokens(restoredLinks, withCode.replacements);
+}
+
+export function validateTelegramHtmlInputForParseMode(htmlText: string): void {
+  if (/<\s*\/?\s*(script|style|iframe|object|embed|form|input|button|img)\b/i.test(htmlText)) {
+    throw new Error("Unsupported HTML tag for Telegram parse_mode=html.");
+  }
+  if (/\son[a-z]+\s*=/i.test(htmlText)) {
+    throw new Error("Event handler attributes are not allowed for Telegram parse_mode=html.");
+  }
+
+  const tagPattern = /<\s*(\/?)\s*([a-zA-Z0-9-]+)([^>]*)>/g;
+  for (const match of htmlText.matchAll(tagPattern)) {
+    const closing = match[1] === "/";
+    const tagName = match[2].toLowerCase();
+    const attrs = match[3].trim();
+
+    if (!TELEGRAM_ALLOWED_HTML_TAGS.has(tagName)) {
+      throw new Error(`Unsupported HTML tag <${tagName}> for Telegram parse_mode=html.`);
+    }
+
+    if (closing) {
+      if (attrs !== "") {
+        throw new Error(`Closing tag </${tagName}> must not include attributes.`);
+      }
+      continue;
+    }
+
+    if (tagName === "a") {
+      if (!/^href="https?:\/\/[^"\s<>]+"$/i.test(attrs)) {
+        throw new Error("Only <a href=\"https://...\"> links are allowed for Telegram parse_mode=html.");
+      }
+      continue;
+    }
+
+    if (attrs !== "") {
+      throw new Error(`Tag <${tagName}> does not allow attributes in parse_mode=html.`);
+    }
+  }
+}
+
+function prepareTelegramText(text: string, parseMode: TelegramParseMode): PreparedTelegramText {
+  const normalizedSource = normalizeTelegramSourceText(text);
+  if (!hasNonEmptyText(normalizedSource)) {
+    throw new Error("Telegram text is empty");
+  }
+
+  if (parseMode === "html") {
+    validateTelegramHtmlInputForParseMode(normalizedSource);
+    return {
+      text: normalizedSource,
+      visibleText: decodeLimitedHtmlEntities(stripTelegramHtmlTags(normalizedSource)),
+      telegramParseMode: "HTML",
+      normalizedSource
+    };
+  }
+
+  if (parseMode === "markdown") {
+    const converted = convertTelegramMarkdownToHtml(normalizedSource);
+    return {
+      text: converted,
+      visibleText: decodeLimitedHtmlEntities(stripTelegramHtmlTags(converted)),
+      telegramParseMode: "HTML",
+      normalizedSource
+    };
+  }
+
+  return {
+    text: normalizedSource,
+    visibleText: normalizedSource,
+    normalizedSource
+  };
+}
+
+function isTelegramParseEntityError(err: unknown): boolean {
+  if (!(err instanceof TelegramApiRequestError)) {
+    return false;
+  }
+  const description = (err.description ?? err.message).toLowerCase();
+  return description.includes("parse entities") ||
+    description.includes("can't parse entities") ||
+    description.includes("can't find end of");
+}
+
+function shouldRetryTelegramAsPlain(parseMode: TelegramParseMode, err: unknown): boolean {
+  return parseMode === "markdown" && isTelegramParseEntityError(err);
+}
+
+const TELEGRAM_IMAGE_MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".bmp": "image/bmp"
+};
+
+function inferTelegramUploadImageMimeType(filePath: string): string | undefined {
+  const ext = path.extname(filePath).toLowerCase();
+  return TELEGRAM_IMAGE_MIME_BY_EXT[ext];
+}
+
+async function parseTelegramApiSuccess(response: Response, action: string): Promise<void> {
+  const payloadRaw = await response.text();
+  let parsedPayload: unknown;
+  try {
+    parsedPayload = JSON.parse(payloadRaw);
+  } catch {
+    throw new TelegramApiRequestError(action, response.status, payloadRaw);
+  }
+
+  const parsedObject = isJsonObject(parsedPayload) ? parsedPayload : undefined;
+  const description = parsedObject ? getStringFromUnknown(parsedObject.description) : undefined;
+  const errorCode = parsedObject ? getIntegerFromUnknown(parsedObject.error_code) : undefined;
+
+  if (!response.ok) {
+    throw new TelegramApiRequestError(action, response.status, payloadRaw, description, errorCode);
+  }
+  if (!parsedObject || parsedObject.ok !== true) {
+    throw new TelegramApiRequestError(action, response.status, payloadRaw, description, errorCode);
+  }
+}
+
+export async function sendTelegram(
+  text: string,
+  runtime: RuntimeConfig,
+  options: TelegramSendOptions = {}
+): Promise<void> {
   const botToken = getTelegramBotToken(runtime);
   const chatId = getString(runtime.telegram.chatId);
   if (!botToken || !chatId) {
     throw new Error("Telegram config missing");
   }
 
-  const response = await fetchWithTimeout(
-    `https://api.telegram.org/bot${botToken}/sendMessage`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text
-      })
-    },
-    15_000
-  );
+  const parseMode = normalizeTelegramParseMode(options.parseMode);
+  const prepared = prepareTelegramText(text, parseMode);
+  enforceTelegramTextLength(prepared.visibleText, TELEGRAM_TEXT_MAX_CHARS, "message");
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Telegram error (${response.status}): ${errorText}`);
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text: prepared.text
+  };
+  if (prepared.telegramParseMode) {
+    body.parse_mode = prepared.telegramParseMode;
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.telegram.org/bot${botToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      },
+      15_000
+    );
+    await parseTelegramApiSuccess(response, "sendMessage");
+  } catch (err) {
+    if (!shouldRetryTelegramAsPlain(parseMode, err)) {
+      throw err;
+    }
+
+    const fallbackBody = {
+      chat_id: chatId,
+      text: prepared.normalizedSource
+    };
+    enforceTelegramTextLength(fallbackBody.text, TELEGRAM_TEXT_MAX_CHARS, "message");
+    const fallbackResponse = await fetchWithTimeout(
+      `https://api.telegram.org/bot${botToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(fallbackBody)
+      },
+      15_000
+    );
+    await parseTelegramApiSuccess(fallbackResponse, "sendMessage");
+  }
+}
+
+export async function sendTelegramPhoto(
+  filePath: string,
+  runtime: RuntimeConfig,
+  options: TelegramSendPhotoOptions = {}
+): Promise<void> {
+  const botToken = getTelegramBotToken(runtime);
+  const chatId = getString(runtime.telegram.chatId);
+  if (!botToken || !chatId) {
+    throw new Error("Telegram config missing");
+  }
+
+  const normalizedPath = getString(filePath);
+  if (!normalizedPath) {
+    throw new Error("Telegram photo filePath is required");
+  }
+
+  const imageMimeType = inferTelegramUploadImageMimeType(normalizedPath);
+  if (!imageMimeType) {
+    throw new Error("Unsupported image format. Use jpg, jpeg, png, webp, gif, or bmp.");
+  }
+
+  let imageData: Buffer;
+  try {
+    imageData = await readFile(normalizedPath);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to read image file: ${message}`);
+  }
+
+  if (imageData.byteLength === 0) {
+    throw new Error("Image file is empty");
+  }
+
+  const imageBytes = Uint8Array.from(imageData);
+  const fileName = path.basename(normalizedPath);
+
+  const caption = getString(options.caption);
+  const parseMode = normalizeTelegramParseMode(options.parseMode);
+  const preparedCaption = caption ? prepareTelegramText(caption, parseMode) : null;
+  if (preparedCaption) {
+    enforceTelegramTextLength(preparedCaption.visibleText, TELEGRAM_CAPTION_MAX_CHARS, "caption");
+  }
+
+  const buildForm = (captionPrepared: PreparedTelegramText | null): FormData => {
+    const form = new FormData();
+    form.set("chat_id", chatId);
+    form.set("photo", new Blob([imageBytes], { type: imageMimeType }), fileName);
+    if (captionPrepared) {
+      form.set("caption", captionPrepared.text);
+      if (captionPrepared.telegramParseMode) {
+        form.set("parse_mode", captionPrepared.telegramParseMode);
+      }
+    }
+    return form;
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.telegram.org/bot${botToken}/sendPhoto`,
+      {
+        method: "POST",
+        body: buildForm(preparedCaption)
+      },
+      30_000
+    );
+    await parseTelegramApiSuccess(response, "sendPhoto");
+  } catch (err) {
+    if (!preparedCaption || !shouldRetryTelegramAsPlain(parseMode, err)) {
+      throw err;
+    }
+
+    const fallbackCaption: PreparedTelegramText = {
+      text: preparedCaption.normalizedSource,
+      visibleText: preparedCaption.normalizedSource,
+      normalizedSource: preparedCaption.normalizedSource
+    };
+    enforceTelegramTextLength(fallbackCaption.visibleText, TELEGRAM_CAPTION_MAX_CHARS, "caption");
+    const fallbackResponse = await fetchWithTimeout(
+      `https://api.telegram.org/bot${botToken}/sendPhoto`,
+      {
+        method: "POST",
+        body: buildForm(fallbackCaption)
+      },
+      30_000
+    );
+    await parseTelegramApiSuccess(fallbackResponse, "sendPhoto");
   }
 }
 

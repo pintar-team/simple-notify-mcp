@@ -15,7 +15,9 @@ import {
   readTelegramImageUpdates,
   readTelegramUpdates,
   sendTelegram,
+  sendTelegramPhoto,
   speakText,
+  TELEGRAM_PARSE_MODES,
   type RuntimeConfig,
   type TtsProvider
 } from "./runtime.js";
@@ -139,8 +141,17 @@ const emptySchema = z.object({});
 const ttsSchema = z.object({
   text: z.string().min(1)
 });
+const telegramParseModeSchema = z.enum(TELEGRAM_PARSE_MODES)
+  .optional()
+  .describe("Text formatting mode: plain (default), markdown subset, or html.");
 const telegramSchema = z.object({
-  text: z.string().min(1)
+  text: z.string().min(1).describe("Text message to send."),
+  parse_mode: telegramParseModeSchema
+});
+const telegramPhotoSchema = z.object({
+  filePath: z.string().min(1).describe("Absolute or workspace-relative image path."),
+  caption: z.string().optional().describe("Optional image caption text."),
+  parse_mode: telegramParseModeSchema
 });
 const telegramReadSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
@@ -173,10 +184,19 @@ function ttsToolDescription(provider: TtsProvider): string {
 }
 
 function telegramNotifyDescription(chatId: string | undefined): string {
+  const parseHint = " Optional parse_mode: plain (default), markdown subset (**bold**, *italic*, _italic_, ~~strike~~, `code`, [text](https://url), # headings), or html.";
   if (chatId) {
-    return `Send a short notification message to Telegram chat ${chatId}. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).`;
+    return `Send a short notification message to Telegram chat ${chatId}. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).${parseHint}`;
   }
-  return "Send a short notification message to Telegram. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).";
+  return `Send a short notification message to Telegram. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).${parseHint}`;
+}
+
+function telegramPhotoDescription(chatId: string | undefined): string {
+  const parseHint = " Optional caption parse_mode: plain (default), markdown, or html.";
+  if (chatId) {
+    return `Send an image from local file path to Telegram chat ${chatId}; supports optional caption.${parseHint}`;
+  }
+  return `Send an image from local file path to Telegram; supports optional caption.${parseHint}`;
 }
 
 function telegramReadDescription(chatId: string | undefined): string {
@@ -277,7 +297,7 @@ const telegramTool = server.registerTool(
   async (params: z.infer<typeof telegramSchema>) => {
     try {
       await reloadRuntimeFromDisk("telegram_notify");
-      await sendTelegram(params.text, runtime);
+      await sendTelegram(params.text, runtime, { parseMode: params.parse_mode });
 
       const unreadPeekLimit = 6;
       let hasUnreadIncoming = false;
@@ -302,6 +322,29 @@ const telegramTool = server.registerTool(
       }
 
       return okResponse({ accepted: true });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+const telegramPhotoTool = server.registerTool(
+  "telegram_send_photo",
+  {
+    title: "Send Telegram image",
+    description: telegramPhotoDescription(getString(runtime.telegram.chatId)),
+    inputSchema: telegramPhotoSchema
+  },
+  async (params: z.infer<typeof telegramPhotoSchema>) => {
+    try {
+      await reloadRuntimeFromDisk("telegram_send_photo");
+      await sendTelegramPhoto(params.filePath, runtime, {
+        caption: params.caption,
+        parseMode: params.parse_mode
+      });
+      return okResponse({
+        accepted: true
+      });
     } catch (err) {
       return errorResponse(err);
     }
@@ -445,6 +488,7 @@ const telegramReadMediaTool = server.registerTool(
 const toolStateCache = {
   tts: {} as ToolStateCache,
   telegram: {} as ToolStateCache,
+  telegramPhoto: {} as ToolStateCache,
   telegramRead: {} as ToolStateCache,
   telegramReadMedia: {} as ToolStateCache
 };
@@ -471,6 +515,10 @@ function refreshToolAvailability(): void {
   updateToolIfChanged(telegramTool, toolStateCache.telegram, {
     enabled: capability.hasTelegram,
     description: telegramNotifyDescription(getString(runtime.telegram.chatId))
+  });
+  updateToolIfChanged(telegramPhotoTool, toolStateCache.telegramPhoto, {
+    enabled: capability.hasTelegram,
+    description: telegramPhotoDescription(getString(runtime.telegram.chatId))
   });
   updateToolIfChanged(telegramReadTool, toolStateCache.telegramRead, {
     enabled: capability.hasTelegram,
@@ -588,6 +636,7 @@ await server.connect(transport);
 const enabled = [
   computeCapabilities().hasTts ? "tts_say" : null,
   computeCapabilities().hasTelegram ? "telegram_notify" : null,
+  computeCapabilities().hasTelegram ? "telegram_send_photo" : null,
   computeCapabilities().hasTelegram ? "telegram_read_incoming" : null,
   computeCapabilities().hasTelegram ? "telegram_read_media" : null,
   "simple_notify_status"
