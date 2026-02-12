@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
   FAL_ELEVEN_VOICES,
@@ -54,7 +54,6 @@ type SetupWebHandlers = {
 };
 
 type SubmittedSetupConfig = {
-  token?: string;
   runTests?: string;
   testText?: string;
   provider?: string;
@@ -297,15 +296,43 @@ function parseBodyByContentType(contentType: string | undefined, rawBody: string
   return payload;
 }
 
-function getSubmittedToken(
-  req: IncomingMessage,
-  url: URL,
-  parsedBody: SubmittedSetupConfig
-): string | undefined {
-  const headerToken = getString(req.headers["x-setup-token"] as string | undefined);
-  const bodyToken = getString(parsedBody.token);
-  const queryToken = getString(url.searchParams.get("token") ?? undefined);
-  return headerToken ?? bodyToken ?? queryToken;
+function getHeaderSetupToken(req: IncomingMessage): string | undefined {
+  const value = req.headers["x-setup-token"];
+  if (Array.isArray(value)) {
+    return getString(value[0]);
+  }
+  return getString(value as string | undefined);
+}
+
+function getQuerySetupToken(url: URL): string | undefined {
+  return getString(url.searchParams.get("token") ?? undefined);
+}
+
+function isValidSetupToken(submittedToken: string | undefined, expectedToken: string): boolean {
+  if (!submittedToken) {
+    return false;
+  }
+  const submitted = Buffer.from(submittedToken);
+  const expected = Buffer.from(expectedToken);
+  if (submitted.byteLength !== expected.byteLength) {
+    return false;
+  }
+  return timingSafeEqual(submitted, expected);
+}
+
+function writeNoStoreHeaders(
+  res: ServerResponse,
+  statusCode: number,
+  contentType: string,
+  extraHeaders: Record<string, string> = {}
+): void {
+  res.writeHead(statusCode, {
+    "Content-Type": contentType,
+    "Cache-Control": "no-store",
+    "Pragma": "no-cache",
+    "Expires": "0",
+    ...extraHeaders
+  });
 }
 
 function mergeRuntimeConfig(current: RuntimeConfig, incoming: SubmittedSetupConfig): RuntimeConfig {
@@ -1081,8 +1108,6 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
         </div>
 
         <form id="setup-form">
-          <input type="hidden" id="token" name="token" value="${escapeHtml(token)}" />
-
           <div class="tabs">
             <button class="tab" type="button" data-tab="tts">TTS</button>
             <button class="tab" type="button" data-tab="telegram">Telegram</button>
@@ -1412,6 +1437,7 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
 
     <script id="initial-state" type="application/json">${initialState}</script>
     <script>
+      const SETUP_TOKEN = ${toScriptJson(token)};
       const TAB_ORDER = ["tts", "telegram", "misc", "keys"];
       const CHECKBOX_NAMES = [
         "falMinimaxEnglishNormalization",
@@ -1465,7 +1491,6 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
       const providerCards = Array.from(document.querySelectorAll(".provider-card"));
       const actionButtons = Array.from(document.querySelectorAll(".action-btn"));
       const initialStateNode = document.getElementById("initial-state");
-      const tokenInput = document.getElementById("token");
       const testTextInput = document.getElementById("test-text");
       const testSection = document.getElementById("test-section");
       const testActionButton = document.getElementById("test-action-btn");
@@ -1475,11 +1500,6 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
       let keyStatus = parsedState.keyStatus && typeof parsedState.keyStatus === "object"
         ? parsedState.keyStatus
         : { openai: { label: "Missing", className: "bad" }, fal: { label: "Missing", className: "bad" }, telegram: { label: "Missing", className: "bad" } };
-
-      const queryToken = new URLSearchParams(window.location.search).get("token");
-      if (queryToken) {
-        tokenInput.value = queryToken;
-      }
 
       function setResult(text, level) {
         resultNode.textContent = text;
@@ -1722,7 +1742,7 @@ function buildSetupPage(configPath: string, token: string, runtime: RuntimeConfi
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "X-Setup-Token": String(payload.token || "")
+              "X-Setup-Token": SETUP_TOKEN
             },
             body: JSON.stringify(payload)
           });
@@ -1797,7 +1817,7 @@ export async function startSetupWebServer(
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       if (!req.url || !req.method) {
-        res.writeHead(400, { "Content-Type": "application/json" });
+        writeNoStoreHeaders(res, 400, "application/json");
         res.end(JSON.stringify({ ok: false, error: "Invalid request" }));
         return;
       }
@@ -1809,17 +1829,33 @@ export async function startSetupWebServer(
       const runtime = handlers.getRuntime();
 
       if (req.method === "GET" && url.pathname === "/") {
+        const submittedToken = getHeaderSetupToken(req) ?? getQuerySetupToken(url);
+        if (!isValidSetupToken(submittedToken, token)) {
+          writeNoStoreHeaders(res, 401, "application/json");
+          res.end(JSON.stringify({ ok: false, error: "Invalid setup token" }));
+          return;
+        }
         const html = buildSetupPage(options.configPath, token, runtime);
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        writeNoStoreHeaders(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          { "Referrer-Policy": "no-referrer" }
+        );
         res.end(html);
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/api/status") {
-        res.writeHead(200, { "Content-Type": "application/json" });
+        const submittedToken = getHeaderSetupToken(req);
+        if (!isValidSetupToken(submittedToken, token)) {
+          writeNoStoreHeaders(res, 401, "application/json");
+          res.end(JSON.stringify({ ok: false, error: "Invalid setup token" }));
+          return;
+        }
+        writeNoStoreHeaders(res, 200, "application/json");
         res.end(JSON.stringify({
           ok: true,
-          setupUrl,
           configPath: options.configPath,
           missingConfig: getMissingConfigFields(runtime),
           keyStatus: buildKeyStatusPayload(runtime)
@@ -1828,15 +1864,15 @@ export async function startSetupWebServer(
       }
 
       if (req.method === "POST" && url.pathname === "/api/config") {
-        const rawBody = await readRequestBody(req);
-        const body = parseBodyByContentType(req.headers["content-type"], rawBody);
-
-        const submittedToken = getSubmittedToken(req, url, body);
-        if (submittedToken !== token) {
-          res.writeHead(401, { "Content-Type": "application/json" });
+        const submittedToken = getHeaderSetupToken(req);
+        if (!isValidSetupToken(submittedToken, token)) {
+          writeNoStoreHeaders(res, 401, "application/json");
           res.end(JSON.stringify({ ok: false, error: "Invalid setup token" }));
           return;
         }
+
+        const rawBody = await readRequestBody(req);
+        const body = parseBodyByContentType(req.headers["content-type"], rawBody);
 
         const nextRuntime = mergeRuntimeConfig(runtime, body);
         await saveRuntimeConfig(options.configPath, nextRuntime);
@@ -1848,7 +1884,7 @@ export async function startSetupWebServer(
           ? await runSetupTests(nextRuntime, runTests, testText)
           : undefined;
 
-        res.writeHead(200, { "Content-Type": "application/json" });
+        writeNoStoreHeaders(res, 200, "application/json");
         res.end(JSON.stringify({
           ok: true,
           missingConfig: getMissingConfigFields(nextRuntime),
@@ -1858,13 +1894,13 @@ export async function startSetupWebServer(
         return;
       }
 
-      res.writeHead(404, { "Content-Type": "application/json" });
+      writeNoStoreHeaders(res, 404, "application/json");
       res.end(JSON.stringify({ ok: false, error: "Not found" }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       try {
         if (!res.headersSent) {
-          res.writeHead(500, { "Content-Type": "application/json" });
+          writeNoStoreHeaders(res, 500, "application/json");
         }
         if (!res.writableEnded) {
           res.end(JSON.stringify({ ok: false, error: message }));
@@ -1882,7 +1918,7 @@ export async function startSetupWebServer(
       console.error(`[simple-notify-mcp] setup web unhandled request error: ${message}`);
       try {
         if (!res.headersSent) {
-          res.writeHead(500, { "Content-Type": "application/json" });
+          writeNoStoreHeaders(res, 500, "application/json");
         }
         if (!res.writableEnded) {
           res.end(JSON.stringify({ ok: false, error: "Internal setup server error" }));
