@@ -1063,12 +1063,24 @@ async function speakWithConfiguredProvider(
   }
 }
 
+let speechQueueTail: Promise<void> = Promise.resolve();
+
+function enqueueSpeech(task: () => Promise<void>): Promise<void> {
+  const job = speechQueueTail.then(task, task);
+  speechQueueTail = job.catch(() => undefined);
+  return job;
+}
+
 export async function speakText(text: string, runtime: RuntimeConfig): Promise<void> {
-  await speakWithConfiguredProvider(text, runtime, true);
+  await enqueueSpeech(async () => {
+    await speakWithConfiguredProvider(text, runtime, true);
+  });
 }
 
 export async function testTtsProvider(text: string, runtime: RuntimeConfig): Promise<void> {
-  await speakWithConfiguredProvider(text, runtime, false);
+  await enqueueSpeech(async () => {
+    await speakWithConfiguredProvider(text, runtime, false);
+  });
 }
 
 export async function sendTelegram(text: string, runtime: RuntimeConfig): Promise<void> {

@@ -6,7 +6,7 @@ KISS MCP server for spoken and Telegram notifications.
 
 - `simple_notify_status`: always available; returns capabilities, missing config, and setup-web state.
 - `tts_say`: text-only input; async by default, uses configured provider (`openai`, `fal-minimax`, `fal-elevenlabs`) with macOS `say` fallback.
-- `telegram_notify`: available when Telegram bot token + chat id are configured.
+- `telegram_notify`: available when Telegram bot token + chat id are configured; returns `hasUnreadIncoming` from a non-advancing unread peek.
 - `telegram_read_incoming`: available when Telegram bot token + chat id are configured; reads incoming updates for configured chat.
 - `telegram_read_media`: available when Telegram bot token + chat id are configured; reads image updates and can return MCP image content blocks.
 
@@ -202,6 +202,10 @@ Input:
 ```json
 { "text": "Job done" }
 ```
+Output notes:
+- returns `{ "accepted": true }` by default
+- adds `hasUnreadIncoming: true` only when unread messages are detected
+- performs a non-advancing unread peek (`limit=6`) before returning
 
 ### telegram_read_incoming
 Input:

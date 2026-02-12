@@ -21,7 +21,7 @@ import {
 } from "./runtime.js";
 import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.5";
 const SERVER_NAME = "simple_notify";
 const SERVER_TITLE = "Simple Notify MCP";
 
@@ -167,28 +167,30 @@ function providerPromptHint(provider: TtsProvider): string {
 }
 
 function ttsToolDescription(provider: TtsProvider): string {
-  return `Speak a short message. ${providerPromptHint(provider)} Async by default from misc config; falls back to system TTS when needed.`;
+  const hint = providerPromptHint(provider);
+  const hintPart = hint ? ` ${hint}` : "";
+  return `Speak a short message using configured provider; async by default and playback is queued (no overlap).${hintPart} Falls back to system TTS when needed.`;
 }
 
 function telegramNotifyDescription(chatId: string | undefined): string {
   if (chatId) {
-    return `Send a short notification message to Telegram chat ${chatId}.`;
+    return `Send a short notification message to Telegram chat ${chatId}. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).`;
   }
-  return "Send a short notification message to Telegram.";
+  return "Send a short notification message to Telegram. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).";
 }
 
 function telegramReadDescription(chatId: string | undefined): string {
   if (chatId) {
-    return `Read incoming Telegram updates for configured chat ${chatId}.`;
+    return `Read incoming Telegram updates for configured chat ${chatId}. Advances in-memory cursor by default; set advanceCursor=false to peek.`;
   }
-  return "Read incoming Telegram updates for configured chat.";
+  return "Read incoming Telegram updates for configured chat. Advances in-memory cursor by default; set advanceCursor=false to peek.";
 }
 
 function telegramReadMediaDescription(chatId: string | undefined): string {
   if (chatId) {
-    return `Read image media updates for configured chat ${chatId}; can return MCP image content.`;
+    return `Read image updates for configured chat ${chatId}; can return MCP image content. Advances in-memory media cursor by default.`;
   }
-  return "Read image media updates for configured chat; can return MCP image content.";
+  return "Read image updates for configured chat; can return MCP image content. Advances in-memory media cursor by default.";
 }
 
 function statusPayload(): Record<string, unknown> {
@@ -226,7 +228,7 @@ const _statusTool = server.registerTool(
   "simple_notify_status",
   {
     title: "Simple Notify status",
-    description: "Read current capabilities and optional setup-web URL for configuration guidance.",
+    description: "Read runtime status: setup URL, missing config, active provider, async mode, and Telegram cursor state.",
     inputSchema: emptySchema
   },
   async () => {
@@ -276,6 +278,29 @@ const telegramTool = server.registerTool(
     try {
       await reloadRuntimeFromDisk("telegram_notify");
       await sendTelegram(params.text, runtime);
+
+      const unreadPeekLimit = 6;
+      let hasUnreadIncoming = false;
+
+      try {
+        const unread = await readTelegramUpdates(runtime, {
+          offset: telegramUpdateOffset,
+          limit: unreadPeekLimit,
+          timeoutSeconds: 0
+        });
+        hasUnreadIncoming = unread.matched > 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[simple-notify-mcp] telegram unread peek failed: ${message}`);
+      }
+
+      if (hasUnreadIncoming) {
+        return okResponse({
+          accepted: true,
+          hasUnreadIncoming: true
+        });
+      }
+
       return okResponse({ accepted: true });
     } catch (err) {
       return errorResponse(err);
