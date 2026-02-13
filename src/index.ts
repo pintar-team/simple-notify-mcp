@@ -199,14 +199,15 @@ function ttsToolDescription(provider: TtsProvider): string {
 
 function telegramNotifyDescription(chatId: string | undefined): string {
   const parseHint = " Optional parse_mode: plain (default), markdown subset (**bold**, *italic*, _italic_, ~~strike~~, `code`, [text](https://url), # headings), or html.";
+  const unreadHint = " Response may include hasUnreadIncoming=true when unread messages are detected via non-advancing peek, and may include suggestedNextAction with a recommended follow-up action.";
   if (chatId) {
-    return `Send a short notification message to Telegram chat ${chatId}. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).${parseHint}`;
+    return `Send a short notification message to Telegram chat ${chatId}.${unreadHint}${parseHint}`;
   }
-  return `Send a short notification message to Telegram. Response includes hasUnreadIncoming=true when unread messages exist (non-advancing unread peek).${parseHint}`;
+  return `Send a short notification message to Telegram.${unreadHint}${parseHint}`;
 }
 
 function telegramPhotoDescription(chatId: string | undefined): string {
-  const parseHint = " Optional caption parse_mode: plain (default), markdown, or html.";
+  const parseHint = " Optional caption parse_mode: plain (default), markdown, or html. Response may include hasUnreadIncoming=true when unread messages are detected, and may include suggestedNextAction with a recommended follow-up action.";
   if (chatId) {
     return `Send an image from local file path to Telegram chat ${chatId}; supports optional caption.${parseHint}`;
   }
@@ -256,6 +257,22 @@ function statusPayload(): Record<string, unknown> {
         : "Start server with --enable-setup-web to enable local configuration UI."
     }
   };
+}
+
+async function peekUnreadIncoming(): Promise<boolean> {
+  const unreadPeekLimit = 6;
+  try {
+    const unread = await readTelegramUpdates(runtime, {
+      offset: telegramUpdateOffset,
+      limit: unreadPeekLimit,
+      timeoutSeconds: 0
+    });
+    return unread.matched > 0;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[simple-notify-mcp] telegram unread peek failed: ${message}`);
+    return false;
+  }
 }
 
 const _statusTool = server.registerTool(
@@ -313,25 +330,13 @@ const telegramTool = server.registerTool(
       await reloadRuntimeFromDisk("telegram_notify");
       await sendTelegram(params.text, runtime, { parseMode: params.parse_mode });
 
-      const unreadPeekLimit = 6;
-      let hasUnreadIncoming = false;
-
-      try {
-        const unread = await readTelegramUpdates(runtime, {
-          offset: telegramUpdateOffset,
-          limit: unreadPeekLimit,
-          timeoutSeconds: 0
-        });
-        hasUnreadIncoming = unread.matched > 0;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[simple-notify-mcp] telegram unread peek failed: ${message}`);
-      }
+      const hasUnreadIncoming = await peekUnreadIncoming();
 
       if (hasUnreadIncoming) {
         return okResponse({
           accepted: true,
-          hasUnreadIncoming: true
+          hasUnreadIncoming: true,
+          suggestedNextAction: "call telegram_read_incoming"
         });
       }
 
@@ -356,6 +361,16 @@ const telegramPhotoTool = server.registerTool(
         caption: params.caption,
         parseMode: params.parse_mode
       });
+
+      const hasUnreadIncoming = await peekUnreadIncoming();
+      if (hasUnreadIncoming) {
+        return okResponse({
+          accepted: true,
+          hasUnreadIncoming: true,
+          suggestedNextAction: "call telegram_read_incoming"
+        });
+      }
+
       return okResponse({
         accepted: true
       });
