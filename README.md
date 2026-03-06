@@ -7,7 +7,9 @@ Model Context Protocol (MCP) server for Codex and Claude Code with text-to-speec
 
 ## Tools
 
-- `simple_notify_status`: always available; returns capabilities, missing config, and setup-web state.
+- `simple_notify_status`: always available; returns capabilities, missing config, and setup-web availability/running state.
+- `simple_notify_setup_web_start`: available when `--enable-setup-web` is set; starts the local setup web UI on demand and returns the current tokenized URL.
+- `simple_notify_setup_web_stop`: available when `--enable-setup-web` is set; stops the local setup web UI when no longer needed.
 - `tts_say`: text-only input; async by default, uses configured provider (`openai`, `fal-minimax`, `fal-elevenlabs`) with macOS `say` fallback.
 - `telegram_notify`: available when Telegram bot token + chat id are configured; supports `parse_mode` (`plain`, `markdown`, `html`) and returns `hasUnreadIncoming` from a non-advancing unread peek.
 - `telegram_send_photo`: available when Telegram bot token + chat id are configured; sends local image files (`jpg`, `jpeg`, `png`, `webp`, `gif`, `bmp`) with optional caption and `parse_mode`.
@@ -24,9 +26,9 @@ Telegram formatting quick examples:
 
 ## Install (npx)
 
-### 1) Recommended: keep setup web always enabled
+### 1) Recommended: agent-managed setup web
 
-Use this if you want easy reconfiguration anytime.
+Use this if you want easy reconfiguration anytime without keeping an HTTP port open all the time.
 
 ```bash
 codex mcp remove simple-notify
@@ -35,7 +37,7 @@ codex mcp add simple-notify -- \
   --enable-setup-web
 ```
 
-Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status` and send you `setupWeb.url`, then open that link.
+Ask your agent (Codex / Claude Code / another agent) to run `simple_notify_status`, call `simple_notify_setup_web_start` if needed, and then send you `setupWeb.url`.
 
 ### 2) Minimal runtime: no setup web
 
@@ -59,11 +61,14 @@ codex mcp add simple-notify -- \
   --setup-port 21420
 ```
 
+Optional legacy behavior:
+- add `--setup-web-autostart` if you explicitly want the setup web server to bind during MCP startup
+
 ## Install (Claude Code)
 
-### 1) Recommended: keep setup web always enabled
+### 1) Recommended: agent-managed setup web
 
-Use this if you want easy reconfiguration anytime.
+Use this if you want easy reconfiguration anytime without keeping an HTTP port open all the time.
 
 ```bash
 claude mcp remove simple-notify
@@ -72,7 +77,7 @@ claude mcp add --transport stdio simple-notify -- \
   --enable-setup-web
 ```
 
-Ask Claude Code to run `simple_notify_status` and share `setupWeb.url`, then open that link.
+Ask Claude Code to run `simple_notify_status`, call `simple_notify_setup_web_start` if needed, and then share `setupWeb.url`.
 
 ### 2) Minimal runtime: no setup web
 
@@ -96,6 +101,9 @@ claude mcp add --transport stdio \
   --enable-setup-web
 ```
 
+Optional legacy behavior:
+- add `--setup-web-autostart` if you explicitly want the setup web server to bind during MCP startup
+
 ## How To Use
 
 Think of `simple-notify-mcp` as your "agent communication layer":
@@ -105,15 +113,17 @@ Think of `simple-notify-mcp` as your "agent communication layer":
 
 ### Typical flow
 
-1) Start with setup web enabled (recommended mode above).
+1) Start with setup web enabled (recommended mode above). This exposes setup-web start/stop tools, but does not open a local port yet.
 
 2) Ask your agent for setup link:
-- "Run `simple_notify_status` and send me `setupWeb.url`."
+- "Run `simple_notify_status`. If setup web is not running, call `simple_notify_setup_web_start` and send me `setupWeb.url`."
 
 3) Open the link, set keys/provider/chat id, then click Save.
    In some clients, you may need to restart the agent process after adding keys so all tools become available.
 
-4) After that, ask your agent to always:
+4) When you are done configuring, ask your agent to call `simple_notify_setup_web_stop`.
+
+5) After that, ask your agent to always:
 - speak on completion
 - send Telegram on completion
 - send Telegram updates during long tasks
@@ -159,7 +169,9 @@ If user uses simple-notify-mcp:
 
 1) Setup flow
 - Call simple_notify_status.
+- If setupWeb.enabled=true and setupWeb.running=false, call simple_notify_setup_web_start.
 - If setupWeb.running=true, return setupWeb.url to user.
+- When setup is finished or user asks to close it, call simple_notify_setup_web_stop.
 - If setup web is disabled, tell user to run MCP with --enable-setup-web.
 
 2) Completion flow
@@ -261,16 +273,21 @@ MiniMax voices available in setup UI:
 
 Flags:
 - `--enable-setup-web` (default off)
+- `--setup-web-autostart` (default off; optional legacy eager-start behavior)
 - `--setup-host` (default `127.0.0.1`; non-loopback values are clamped to `127.0.0.1`)
 - `--setup-port` (default `21420`)
 - `--setup-token` (optional; if omitted, generated per run)
 
 Behavior:
-- setup web starts whenever `--enable-setup-web` is set
+- `--enable-setup-web` exposes the on-demand setup-web tools but does not bind a port by itself
+- `simple_notify_setup_web_start` starts the local setup server only when the agent needs it
+- `simple_notify_setup_web_stop` closes the local setup server when you are done
+- `--setup-web-autostart` restores eager startup if you explicitly want the previous behavior
 - local bind only
 - if `--setup-port` is occupied, server uses the next free local port
 - setup URL includes the current run token query parameter
-- use `simple_notify_status` to discover `setupWeb.url` and `missingConfig`
+- if `--setup-token` is omitted, each fresh start generates a new token
+- use `simple_notify_status` to discover whether setup web is running, plus `setupWeb.url` and `missingConfig`
 
 ## Tool Contracts
 
@@ -279,6 +296,25 @@ Input:
 ```json
 {}
 ```
+
+### simple_notify_setup_web_start
+Input:
+```json
+{}
+```
+Output notes:
+- starts setup web only when `--enable-setup-web` is set
+- returns current setup-web state, including `setupWeb.url`
+- if already running, returns the existing URL without rebinding
+
+### simple_notify_setup_web_stop
+Input:
+```json
+{}
+```
+Output notes:
+- safe to call repeatedly
+- returns `wasRunning=false` when setup web was already stopped
 
 ### tts_say
 Input:

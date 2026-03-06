@@ -22,7 +22,7 @@ import {
   type RuntimeConfig,
   type TtsProvider
 } from "./runtime.js";
-import { startSetupWebServer, type SetupWebController } from "./setup-web.js";
+import { createSetupWebManager } from "./setup-web/manager.js";
 
 function readVersionFromPackageJson(): string {
   try {
@@ -78,6 +78,7 @@ let runtime: RuntimeConfig = loaded.runtime;
 const { args, configPath } = loaded;
 
 const setupWebEnabled = isEnabledFlag(args["enable-setup-web"]);
+const setupWebAutostart = isEnabledFlag(args["setup-web-autostart"]);
 const setupHost = getString(args["setup-host"]) ?? "127.0.0.1";
 const setupPortRaw = Number(getString(args["setup-port"]) ?? "21420");
 const setupPort = Number.isInteger(setupPortRaw) && setupPortRaw > 0 && setupPortRaw <= 65535
@@ -85,8 +86,6 @@ const setupPort = Number.isInteger(setupPortRaw) && setupPortRaw > 0 && setupPor
   : 21420;
 const setupToken = getString(args["setup-token"]);
 
-let setupWeb: SetupWebController | null = null;
-let setupWebError: string | null = null;
 let nextTtsJobId = 1;
 let telegramUpdateOffset: number | undefined;
 let telegramMediaUpdateOffset: number | undefined;
@@ -139,6 +138,23 @@ async function reloadRuntimeFromDisk(context: string): Promise<void> {
     console.error(`[simple-notify-mcp] runtime reload failed (${context}): ${message}`);
   }
 }
+
+const setupWebManager = createSetupWebManager({
+  enabled: setupWebEnabled,
+  autostart: setupWebAutostart,
+  host: setupHost,
+  port: setupPort,
+  token: setupToken,
+  configPath,
+  getRuntime: () => runtime,
+  reloadRuntime: async () => {
+    await reloadRuntimeFromDisk("setup_web");
+  },
+  onRuntimeSaved: async nextRuntime => {
+    runtime = nextRuntime;
+    refreshToolAvailability();
+  }
+});
 
 const server = new McpServer(
   {
@@ -228,8 +244,17 @@ function telegramReadMediaDescription(chatId: string | undefined): string {
   return "Read image updates for configured chat; can return MCP image content. Advances in-memory media cursor by default.";
 }
 
+function setupWebStartDescription(): string {
+  return "Start the local setup web UI when configuration is needed. Returns the current tokenized local URL; if already running, returns the existing URL.";
+}
+
+function setupWebStopDescription(): string {
+  return "Stop the local setup web UI when it is no longer needed. Safe to call repeatedly.";
+}
+
 function statusPayload(): Record<string, unknown> {
   const capability = computeCapabilities();
+  const setupWebStatus = setupWebManager.getStatus();
   return {
     ok: true,
     version: VERSION,
@@ -243,19 +268,7 @@ function statusPayload(): Record<string, unknown> {
     ttsAvailable: capability.hasTts,
     telegramAvailable: capability.hasTelegram,
     missingConfig: capability.missingConfig,
-    setupWeb: {
-      enabled: setupWebEnabled,
-      running: Boolean(setupWeb),
-      url: setupWeb?.state.url ?? null,
-      host: setupWeb?.state.host ?? null,
-      port: setupWeb?.state.port ?? null,
-      error: setupWebError,
-      hint: setupWebEnabled
-        ? (setupWeb
-          ? "Open setupWeb.url in your local browser to configure."
-          : "Setup web is enabled but not running (startup failed).")
-        : "Start server with --enable-setup-web to enable local configuration UI."
-    }
+    setupWeb: setupWebStatus
   };
 }
 
@@ -275,11 +288,54 @@ async function peekUnreadIncoming(): Promise<boolean> {
   }
 }
 
+const setupWebStartTool = server.registerTool(
+  "simple_notify_setup_web_start",
+  {
+    title: "Start setup web UI",
+    description: setupWebStartDescription(),
+    inputSchema: emptySchema
+  },
+  async () => {
+    try {
+      await reloadRuntimeFromDisk("simple_notify_setup_web_start");
+      const result = await setupWebManager.start("simple_notify_setup_web_start");
+      return okResponse({
+        ok: true,
+        alreadyRunning: result.alreadyRunning,
+        setupWeb: setupWebManager.getStatus()
+      });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
+const setupWebStopTool = server.registerTool(
+  "simple_notify_setup_web_stop",
+  {
+    title: "Stop setup web UI",
+    description: setupWebStopDescription(),
+    inputSchema: emptySchema
+  },
+  async () => {
+    try {
+      const result = await setupWebManager.stop("simple_notify_setup_web_stop");
+      return okResponse({
+        ok: true,
+        wasRunning: result.wasRunning,
+        setupWeb: setupWebManager.getStatus()
+      });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+);
+
 const _statusTool = server.registerTool(
   "simple_notify_status",
   {
     title: "Simple Notify status",
-    description: "Read runtime status: setup URL, missing config, active provider, async mode, and Telegram cursor state.",
+    description: "Read runtime status: setup-web availability and running state, missing config, active provider, async mode, and Telegram cursor state.",
     inputSchema: emptySchema
   },
   async () => {
@@ -515,6 +571,8 @@ const telegramReadMediaTool = server.registerTool(
 );
 
 const toolStateCache = {
+  setupWebStart: {} as ToolStateCache,
+  setupWebStop: {} as ToolStateCache,
   tts: {} as ToolStateCache,
   telegram: {} as ToolStateCache,
   telegramPhoto: {} as ToolStateCache,
@@ -537,6 +595,14 @@ function updateToolIfChanged(
 
 function refreshToolAvailability(): void {
   const capability = computeCapabilities();
+  updateToolIfChanged(setupWebStartTool, toolStateCache.setupWebStart, {
+    enabled: setupWebEnabled,
+    description: setupWebStartDescription()
+  });
+  updateToolIfChanged(setupWebStopTool, toolStateCache.setupWebStop, {
+    enabled: setupWebEnabled,
+    description: setupWebStopDescription()
+  });
   updateToolIfChanged(ttsTool, toolStateCache.tts, {
     enabled: capability.hasTts,
     description: ttsToolDescription(runtime.tts.provider)
@@ -561,30 +627,12 @@ function refreshToolAvailability(): void {
 
 refreshToolAvailability();
 
-if (setupWebEnabled) {
+if (setupWebEnabled && setupWebAutostart) {
   try {
-    setupWeb = await startSetupWebServer(
-      {
-        host: setupHost,
-        port: setupPort,
-        token: setupToken,
-        configPath
-      },
-      {
-        getRuntime: () => runtime,
-        reloadRuntime: async () => {
-          await reloadRuntimeFromDisk("setup_web");
-        },
-        onRuntimeSaved: async nextRuntime => {
-          runtime = nextRuntime;
-          refreshToolAvailability();
-        }
-      }
-    );
-    console.error(`[simple-notify-mcp] setup web ready at ${setupWeb.state.url} (local only)`);
-  } catch (err) {
-    setupWebError = err instanceof Error ? err.message : String(err);
-    console.error(`[simple-notify-mcp] setup web failed: ${setupWebError}`);
+    await reloadRuntimeFromDisk("setup_web_autostart");
+    await setupWebManager.start("autostart");
+  } catch {
+    // Error is already recorded and logged by the setup web manager.
   }
 }
 
@@ -641,14 +689,7 @@ const shutdown = async (reason: string): Promise<void> => {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[simple-notify-mcp] server close error: ${message}`);
   }
-  if (setupWeb) {
-    try {
-      await setupWeb.close();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[simple-notify-mcp] setup web close error: ${message}`);
-    }
-  }
+  await setupWebManager.shutdown(reason);
   process.exit(0);
 };
 
@@ -663,6 +704,8 @@ startParentWatchdog();
 await server.connect(transport);
 
 const enabled = [
+  setupWebEnabled ? "simple_notify_setup_web_start" : null,
+  setupWebEnabled ? "simple_notify_setup_web_stop" : null,
   computeCapabilities().hasTts ? "tts_say" : null,
   computeCapabilities().hasTelegram ? "telegram_notify" : null,
   computeCapabilities().hasTelegram ? "telegram_send_photo" : null,

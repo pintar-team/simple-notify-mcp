@@ -20,6 +20,10 @@ import type { SetupWebController, SetupWebHandlers, SetupWebOptions, SetupWebSta
 
 export type { SetupWebController, SetupWebOptions, SetupWebState } from "./setup-web/types.js";
 
+function isErrnoException(value: unknown): value is NodeJS.ErrnoException {
+  return typeof value === "object" && value !== null && "code" in value;
+}
+
 export async function startSetupWebServer(
   options: SetupWebOptions,
   handlers: SetupWebHandlers
@@ -32,6 +36,7 @@ export async function startSetupWebServer(
   let setupUrl = `${baseUrl}?token=${encodeURIComponent(token)}`;
 
   let server: Server | null = null;
+  let closing: Promise<void> | null = null;
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
@@ -167,17 +172,32 @@ export async function startSetupWebServer(
     state,
     close: async () => {
       if (!server) {
+        state.running = false;
         return;
       }
-      await new Promise<void>((resolve, reject) => {
-        server?.close(err => {
-          if (err) {
+      if (closing) {
+        await closing;
+        return;
+      }
+
+      const activeServer = server;
+      closing = new Promise<void>((resolve, reject) => {
+        activeServer.close(err => {
+          if (err && !(isErrnoException(err) && err.code === "ERR_SERVER_NOT_RUNNING")) {
             reject(err);
           } else {
             resolve();
           }
         });
       });
+
+      try {
+        await closing;
+      } finally {
+        state.running = false;
+        server = null;
+        closing = null;
+      }
     }
   };
 }
